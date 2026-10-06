@@ -138,3 +138,100 @@ node tools/lean-lint.mjs --mcp path/to/server.mjs
 
 ⇒ ★ **可调的改进方向**（尚未实现）：把 `firstLine` 的 120 改成可配置，或让**通道里保留完整描述**、只让目录用一行索引。
 ⇒ 代价：token 会回升。**这是一个可以实测的取舍**，不该拍脑袋定。
+
+---
+
+## 七、★★★ 范文库（照这个抄，不要照我描述抄）
+
+> 全部从 `docs/tool-catalog.md` 逐字摘出（那是从真实 `ctx.tools.schemas()` 生成的）。
+> **模仿样本比模仿规则有效得多** —— 先读 20 条，再写你自己的。
+
+### 7.1 一句话型（最短，24–62 字符）
+
+适合：**参数少、语义无歧义**的工具。
+
+```
+Update the current goal.
+Navigate a Stagehand browser tab to a URL.
+Create or fully replace a UTF-8 text file.
+List resources available from an MCP server.
+List the active reminders in the current session.
+Request cancellation of a running background job.
+List, create, select, or close a Stagehand browser tab.
+Read a UTF-8 text file and return line-numbered content.
+Capture a Stagehand tab screenshot for visual inspection.
+Edit an existing UTF-8 text file by replacing literal text.
+Create one unowned pending task on the shared Team task board.
+Fetch the content of a specific HTTP(S) URL and return it decoded to text.
+```
+
+★ **句式**：`<动词> <对象>.` 或 `<动词> <对象> and return <返回物>.`
+★ ★ 注意倒数几条：**把返回值也写进同一句**（`and return line-numbered content`）。
+
+### 7.2 一句话 + 限定型（74–100 字符）
+
+适合：**有范围/对象限定**的工具。
+
+```
+Perform one natural-language browser action using the configured Stagehand model.
+Find browser actions matching an instruction using the configured Stagehand model.
+Read the complete latest value of one shared task before changing or executing it.
+Extract page data using the configured Stagehand model and an optional JSON Schema.
+Close one persistent terminal and wait until its captured owned process tree is gone.
+List your background jobs (running and finished) with their ids, kinds, and statuses.
+Read the current session goal, including the id and revision that update_goal requires.
+Read a bounded page of retained output from a persistent terminal without sending input.
+Interrupt one teammate's current turn while preserving its pending inbox. Team Lead only.
+List shared tasks, including readiness, owner, revision, blockers, and write-scope warnings.
+```
+
+★ **句式**：`<动词> <对象> <现在分词/介词短语作限定>.`
+★ 限定用 `using …` / `including …` / `while …` / `before …` / `without …` / `and wait until …`。
+★ ★ 权限类限定直接跟一句短句：**`Team Lead only.`**
+
+### 7.3 两句型（★ 官方主流：中位 2 句）
+
+★ **第一句做什么，第二句「何时用 / 前提 / 副作用 / 返回什么」**：
+
+```
+Declare existing files as final deliverables for the user. Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; prefer your final response when that suffices.
+
+Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`.
+
+Use only in plan mode. Present your plan for the user's review and, on approval, leave plan mode.
+
+Create a persisted goal that keeps this session working across automatic continuation rounds. Use it when the direct human request is a long-running objective, even if the user did not say "goal"; not for single-turn work.
+```
+
+★ 第二句的开头词（照抄）：**`Use it when …`** · **`Each call …`** · **`Not for: …`** · **`Prefer …`**
+
+### 7.4 参数描述的两种写法（官方 100% 句号收尾）
+
+```
+Management operation.
+Zero-based list offset; defaults to 0.
+List page size, from 1 to 100; defaults to 25.
+Whether the user may select more than one option. Defaults to false.
+Positive elapsed-time budget in milliseconds, capped by the deployment maximum.
+Clear, concise description of what this program does in active voice, 5-10 words (shown in the UI).
+Short user-facing option label.
+Stable id for this question; echoed in the answer.
+Optional short heading for the question, such as "Confirm" or "Choose Mode".
+```
+
+★ 句式：`<它是什么>[; <范围>][; defaults to <默认值>].`
+★ boolean 参数惯例：**`Whether <命题>. Defaults to <true|false>.`**
+★ 示例值直接写进描述：**`such as "Confirm" or "Choose Mode"`**
+
+### 7.5 ★ 照抄这个结构写（填空模板）
+
+```
+<动词> <对象>[ <限定>][ and return <返回物>].
+[Use it when <场景> | Each call <行为> | Not for <不该用的场景>].   ← 可选第二句
+```
+
+参数：
+
+```
+<它是什么>[; <范围/取值>][; defaults to <默认值>].        ← 句号必须
+```
