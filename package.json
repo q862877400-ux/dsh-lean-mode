@@ -1,0 +1,24 @@
+{
+  "name": "@local/dsh-lean-mode",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "description": "Present DSH tools to the model in a lean, executable form — installed, it just works.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "tools",
+    "context"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
