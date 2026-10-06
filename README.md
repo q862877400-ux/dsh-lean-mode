@@ -55,8 +55,16 @@ End-to-end callability (tool name in the catalogue **and** the emitted arguments
 
 ## Install
 
+**From GitHub** (verified end to end: installed this way, the mode appears in the UI preset menu and takes effect)
+
 ```powershell
-dsh plugin --profile <profile> add <path to this directory>
+dsh plugin --profile web add github:q862877400-ux/dsh-lean-mode
+```
+
+**From a local checkout**
+
+```powershell
+dsh plugin --profile web add <path to this directory>
 ```
 
 **Uninstall**

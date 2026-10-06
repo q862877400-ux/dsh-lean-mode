@@ -54,8 +54,16 @@
 
 ## 安装
 
+**从 GitHub 装**（已端到端验证：这样装上后，模式会出现在界面菜单里并真正生效）
+
 ```powershell
-dsh plugin --profile <profile> add <本目录的路径>
+dsh plugin --profile web add github:q862877400-ux/dsh-lean-mode
+```
+
+**从本地目录装**
+
+```powershell
+dsh plugin --profile web add <本目录的路径>
 ```
 
 **卸载**

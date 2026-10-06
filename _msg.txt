@@ -1,0 +1,8 @@
+docs: document the GitHub install, verified end to end
+
+Installed with `dsh plugin --profile web add github:q862877400-ux/dsh-lean-mode`
+into a clean sandbox profile: the bundle's rows compose, "Lean mode" appears in
+the UI preset menu, and selecting it produces the catalog section with the
+argument envelope.
+
+README.md and README.zh.md both carry the command.
