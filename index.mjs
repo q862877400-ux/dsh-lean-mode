@@ -23,11 +23,20 @@ const CATALOG_HEADER = [
   '★ 键后面带 : … 的是必填。',
 ].join('\n')
 
-function firstLine(description) {
+/**
+ * 描述压缩到一行。
+ * ★ 在【词边界】截断 —— 早期版本在 120 处硬切字符，会把单词切成两半
+ *   （官方 pwsh 的 "pass" 被切成 "p"+"s"、run_code 的 "function" 被切成 "f"+"ction"），
+ *   模型读到破碎英文，是准确率损失的来源之一。
+ */
+export function firstLine(description) {
   const text = String(description == null ? '' : description)
-  const cut = text.split(/[。\n]/)[0] || ''
-  const trimmed = cut.trim()
-  return trimmed.length > 120 ? trimmed.slice(0, 120) + '…' : trimmed
+  const trimmed = (text.split(/[。\n]/)[0] || '').trim()
+  if (trimmed.length <= 120) return trimmed
+  const head = trimmed.slice(0, 120)
+  const space = head.lastIndexOf(' ')
+  const body = space > 80 ? head.slice(0, space) : head   // 回退到词边界，但最多只让出 40 字符
+  return body.replace(/[,;:\s]+$/, '') + '…'
 }
 
 /** 把一个 JSON schema 投影成顶层契约。 */

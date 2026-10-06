@@ -3,13 +3,12 @@
 // 用法: node lean-lint.mjs <tools.json|--mcp <server.mjs>>
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
-import { shallowParameters } from '../index.mjs'
+import { shallowParameters, firstLine } from '../index.mjs'
 
 const BT = String.fromCharCode(96)
 const CATALOG_HEADER = ['## Tool catalog','','★ 每条都给出该工具实参的【顶层 JSON 形状】：箭头右边就是你要传的对象。','★ 形状里没有列出的键一律不要传；★ 不要拆开单键信封 —— 形如 {"params": …} 的，所有实参都放进 params 里面。','★ 键后面带 : … 的是必填。'].join('\n')
 const B = (o) => Buffer.byteLength(JSON.stringify(o), 'utf8')
 
-function firstLine(d) { const t = String(d == null ? '' : d); const c = t.split(/[。\n]/)[0] || ''; const x = c.trim(); return x.length > 120 ? x.slice(0, 120) + '…' : x }
 function catalogLine(t) {
   const p = t.parameters || {}; const props = p.properties || {}; const req = new Set(Array.isArray(p.required) ? p.required : [])
   const keys = Object.keys(props)
