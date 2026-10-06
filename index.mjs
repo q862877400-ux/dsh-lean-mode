@@ -16,11 +16,11 @@ export const inject = ['systemPrompt']
 
 const CATALOG_SECTION = 'tools:catalog'
 const CATALOG_HEADER = [
-  '## Tool catalog',
+  '## Available tools',
   '',
-  '★ 每条都给出该工具实参的【顶层 JSON 形状】：箭头右边就是你要传的对象。',
-  '★ 形状里没有列出的键一律不要传；★ 不要拆开单键信封 —— 形如 {"params": …} 的，所有实参都放进 params 里面。',
-  '★ 键后面带 : … 的是必填。',
+  '★ 这些工具都存在 —— 名字在这里，完整 schema 在工具定义里（按需查）。',
+  '★ 需要哪个就照它的定义调；★ 键后面带 : … 的是必填。',
+  '★ 不要凭记忆猜参数 —— 用错工具或漏参数比多看一眼定义贵得多。',
 ].join('\n')
 
 /**
@@ -69,6 +69,19 @@ function catalogLine(tool) {
   return '- ' + tool.name + ' ← 实参写成 ' + shape + ' // ' + firstLine(tool.description)
 }
 
+/**
+ * ★ 目录默认【只列名字】。
+ * 为什么：目录进的是【系统提示词】（指令区），而指令区越短小精确、遵循度越好。
+ * 早期版本每条工具写「实参形状 + 一句描述」= 138 B/工具 ⇒ 731 个工具就是 101 KB，
+ * 超出 65536 的指令预算，会把 AGENTS.md 撑到被截断 —— 那是本末倒置。
+ * 只列名字 = 13 B/工具 ⇒ 731 个工具 10 KB，占预算 15%。
+ * 实参细节本来就在【工具通道】里（结构化、按需查），不需要在指令区重复一遍。
+ */
+function catalogBody(tools, full) {
+  if (full) return CATALOG_HEADER + '\n\n' + '```' + '\n' + tools.map(catalogLine).join('\n') + '\n' + '```'
+  return CATALOG_HEADER + '\n\n' + tools.map(t => '- ' + t.name).join('\n')
+}
+
 /** 这次装配属于哪个 preset（拿不到就当没命中）。 */
 function presetOf(ctx, scope) {
   const registry = ctx.get('agentPresets')
@@ -96,7 +109,7 @@ export function apply(ctx, config) {
     if (!withCatalog) return Object.assign({}, base, { tools })
     if ((base.sections || []).some(s => s.name === CATALOG_SECTION)) return Object.assign({}, base, { tools })
     const order = ctx.systemPrompt.getSectionOrder('TOOLS_SDK')
-    const body = CATALOG_HEADER + '\n\n' + '```' + '\n' + tools.map(catalogLine).join('\n') + '\n' + '```'
+    const body = catalogBody(tools, settings.catalog === 'full')
     return Object.assign({}, base, { tools, sections: base.sections.concat([{ name: CATALOG_SECTION, order, interpolate: false, text: body }]) })
   })
 }
