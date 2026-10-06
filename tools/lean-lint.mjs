@@ -104,7 +104,13 @@ for (const t of tools) {
 console.log('工具数 = ' + tools.length)
 console.log('native schema 合计 = ' + nativeBytes + ' B   (' + Math.round(nativeBytes / tools.length) + ' B/工具)')
 console.log('lean 通道 + 目录   = ' + shallowBytes + ' B   (' + Math.round(shallowBytes / tools.length) + ' B/工具)')
-console.log('⇒ 比值 = ' + (shallowBytes / nativeBytes).toFixed(3) + (shallowBytes < nativeBytes ? '  ✅ lean 更省' : '  ❌ lean 更贵'))
+console.log('⇒ 字节比 = ' + (shallowBytes / nativeBytes).toFixed(3) + '   ⚠ 这只是参考：省得多 = 丢得多，不是好')
+const cutCount = tools.filter(t => firstLine(String(t.description ?? '')).length < String(t.description ?? '').length).length
+console.log('★ 信息完整性（lean 相对 native 丢掉的）')
+console.log('   描述被截断的工具      = ' + cutCount + '/' + tools.length)
+const lostKeys = tools.flatMap(t => Object.entries((t.parameters || {}).properties || {}).filter(([, v]) => v.type === 'object' || v.type === 'array' || (v.enum && v.enum.length > 12) || v.description || v.default !== undefined).map(([k, v]) => k))
+console.log('   参数里被 lean 丢掉的信息点 = ' + lostKeys.length + ' 处（嵌套/数组/枚举>12/默认值/属性说明）')
+console.log('   ⇒ ★ 要保住这些信息就用 catalog 档（shape: false），要压上下文才用 lean 档')
 console.log('')
 const byRule = {}
 for (const f of fails) { (byRule[f.rule] ||= []).push(f) }
