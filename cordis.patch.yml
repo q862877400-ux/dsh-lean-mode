@@ -25,7 +25,7 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: Your working directory is {{cwd}}.
+              suffix: Your working directory is the current project workspace.
               prefix: You are a coding agent powered by the {{model}} model.
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
@@ -158,3 +158,4 @@
           - id: tool-plugin-manager
             name: '@deepseek-ai/dsh-plugin-manager/tools'
             disabled: true
+
