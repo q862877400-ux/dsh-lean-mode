@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'
 import { shallowParameters, firstLine } from '../index.mjs'
 
 const BT = String.fromCharCode(96)
-const CATALOG_HEADER = ['## Tool catalog','','★ 每条都给出该工具实参的【顶层 JSON 形状】：箭头右边就是你要传的对象。','★ 形状里没有列出的键一律不要传；★ 不要拆开单键信封 —— 形如 {"params": …} 的，所有实参都放进 params 里面。','★ 键后面带 : … 的是必填。'].join('\n')
+const CATALOG_HEADER = ['## Available tools','','★ 这些工具都存在 —— 名字在这里，完整 schema 在工具定义里（按需查）。','★ 需要哪个就照它的定义调；★ 键后面带 : … 的是必填。','★ 不要凭记忆猜参数 —— 用错工具或漏参数比多看一眼定义贵得多。'].join('\n')
 const B = (o) => Buffer.byteLength(JSON.stringify(o), 'utf8')
 
 // 官方实测口径（docs/tool-catalog.md，n=72 工具 / 228 条描述）
@@ -46,8 +46,13 @@ const argv = process.argv.slice(2)
 // ★ 两套模式：--mode official（照官方，中位 139，允许 2 句） vs --mode lean（≤120，目录友好）
 const modeArg = argv.indexOf('--mode')
 const MODE = modeArg >= 0 ? argv[modeArg + 1] : 'lean'
-const files = argv.filter((a, i) => a !== '--mode' && i !== modeArg + 1)
-const raw = files[0] === '--mcp' ? await fromMcp(files[1]) : JSON.parse(fs.readFileSync(files[0], 'utf8'))
+// 剔除 --mode 及其取值。用「位置是否等于 modeArg/modeArg+1」判断，不能只比字面量：
+// 当 --mode 缺席时 modeArg 为 -1，i !== modeArg + 1 会误删第一个参数。
+const files = modeArg >= 0 ? argv.filter((_, i) => i !== modeArg && i !== modeArg + 1) : argv
+// ★ 兼容三种输入：裸数组、DSH 会话导出（{tools:[…]}）、以及 MCP 的 tools/list 结果
+const unwrap = value => Array.isArray(value) ? value : Array.isArray(value?.tools) ? value.tools : undefined
+const raw = files[0] === '--mcp' ? await fromMcp(files[1]) : unwrap(JSON.parse(fs.readFileSync(files[0], 'utf8')))
+if (raw === undefined) { console.log('输入里找不到工具数组（期望裸数组或 {tools:[…]}）'); process.exit(1) }
 // ★ 兼容 MCP 的 inputSchema 与 DSH 的 parameters 两种叫法
 const tools = raw.map(t => ({ name: t.name, description: t.description, parameters: t.parameters || t.inputSchema || t.schema }))
 if (!tools.length) { console.log('没读到工具'); process.exit(1) }
@@ -64,6 +69,16 @@ const W = (tool, rule, detail) => warns.push({ tool, rule, detail })
 const F = (tool, rule, detail) => fails.push({ tool, rule, detail })
 
 // ── A. lean 呈现的坑 ──────────────────────────────────────────────
+// $ref 会由 shallowParameters 展开，检查前先展开，否则会把「$ref 没有内联 type」误报成违规。
+const resolveRef = (node, root) => {
+  if (node == null || typeof node !== 'object' || node.$ref === undefined) return node
+  let cursor = root
+  for (const segment of String(node.$ref).replace(/^#\//, '').split('/')) {
+    if (cursor == null) return {}
+    cursor = cursor[segment]
+  }
+  return cursor == null ? {} : cursor
+}
 for (const t of tools) {
   const p = t.parameters || {}
   const d = String(t.description ?? '')
@@ -72,9 +87,10 @@ for (const t of tools) {
   const cap = MODE === 'official' ? 320 : 120
   if (d.length > cap) F(t.name, 'A3 描述须 ≤' + cap + ' 字符（' + MODE + ' 模式）', '当前 ' + d.length)
   if (MODE === 'lean' && !VERB_STEM.test(String(t.description ?? '').toLowerCase())) { /* B1 另报 */ }
-  for (const [k, v] of Object.entries(p.properties || {})) {
+  for (const [k, raw] of Object.entries(p.properties || {})) {
+    const v = resolveRef(raw, p)
     if (v.enum && v.enum.length > 12) F(t.name, 'A4 枚举须 ≤12 个', k + ' 有 ' + v.enum.length + ' 个')
-    if (!v.type) F(t.name, 'A5 每个键须写 type', k)
+    if (!v.type && v.properties == null) F(t.name, 'A5 每个键须写 type', k)
     if (v.type === 'object') W(t.name, 'A6 慎用嵌套 object', k + '（lean 只留 type；native 完整）')
     if (v.type === 'array') W(t.name, 'A7 慎用数组', k + '（lean 只留 type；native 完整）')
     if (Array.isArray(v.type)) F(t.name, 'A8 type 不可为数组', k)

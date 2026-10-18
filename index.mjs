@@ -39,19 +39,43 @@ export function firstLine(description) {
   return body.replace(/[,;:\s]+$/, '') + '…'
 }
 
+/**
+ * 把一个 JSON Schema 里的 `$ref` 就地展开到它指向的 `$defs` 条目。
+ * MCP 服务器（Pydantic 生成的那类）习惯把真正的入参写成
+ * `{"params": {"$ref": "#/$defs/XxxInput"}}`，参数名全在 `$defs` 里。
+ * 不展开的话，浅投影后只剩 `{"params": {"type": "object"}}`，
+ * 模型看不到任何参数名，只能自己编（实测 44.2% 对）。
+ */
+function resolveRef(node, root) {
+  if (node == null || typeof node !== 'object') return node
+  if (node.$ref === undefined) return node
+  let cursor = root
+  for (const segment of String(node.$ref).replace(/^#\//, '').split('/')) {
+    if (cursor == null) return {}
+    cursor = cursor[segment]
+  }
+  return cursor == null ? {} : cursor
+}
+
 /** 把一个 JSON schema 投影成顶层契约。 */
 export function shallowParameters(parameters) {
   if (parameters == null || parameters.type !== 'object' || parameters.properties == null) return { type: 'object' }
   const required = Array.isArray(parameters.required) ? parameters.required : []
   const properties = {}
   for (const key of Object.keys(parameters.properties)) {
-    const prop = parameters.properties[key] || {}
+    const prop = resolveRef(parameters.properties[key] || {}, parameters)
     const declared = Array.isArray(prop.type) ? prop.type[0] : prop.type
     const type = typeof declared === 'string' ? declared : 'object'
     const enumValues = prop.enum
-    properties[key] = Array.isArray(enumValues) && enumValues.length > 0 && enumValues.length <= 12
+    const shape = Array.isArray(enumValues) && enumValues.length > 0 && enumValues.length <= 12
       ? { type, enum: enumValues }
       : { type }
+    // 被展开出来的对象带上它的键名——那正是模型唯一能看到的参数清单。
+    if (prop.properties != null && Object.keys(prop.properties).length > 0) {
+      shape.properties = shallowParameters(prop).properties
+      if (Array.isArray(prop.required) && prop.required.length > 0) shape.required = prop.required
+    }
+    properties[key] = shape
   }
   const out = { type: 'object', properties }
   if (required.length > 0) out.required = required
