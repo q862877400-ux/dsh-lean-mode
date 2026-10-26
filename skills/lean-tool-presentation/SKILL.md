@@ -287,7 +287,7 @@ config:
 | 内容 | 来源 |
 |---|---|
 | 三档、四条弯路、实测数字 | 插件 `docs/when-to-use.md` |
-| 描述写法、范文库、300 预算、v1→v2 变化 | 插件 `docs/tool-description-style.md` |
+| 描述写法、范文库、300 预算、现行处理机制 | 插件 `docs/tool-description-style.md` |
 | schema 该写肥、195 B/工具 | 插件 `docs/authoring-mcp-tools.md` |
 | 目录只列名字的理由 | 插件 `index.mjs` 注释 |
 | `compressDescription` 实现 | 插件 `index.mjs`（`DEFAULT_MAX_CHARS=300`） |

@@ -118,11 +118,19 @@ node "$P/tools/curate-pending.mjs" remove <toolName>
 - [ ] `validate-descriptions.mjs --pending` 退出码 **0**
 - [ ] 校验通过**之后**才 `remove`
 
-## 八、磁盘上的实测状态（2026-10-26）
+## 八、磁盘上的实测状态（2026-10-26 重启后）
 
-`descriptions.pending.json` **尚不存在** —— 插件是懒写入，只有真的装配到需要补表的工具才会创建。
+`descriptions.pending.json` **已存在，54 个待补**：
 
-想现在演练流程，可以造一份测试 pending（形状必须是 `{_meta,tools,pending}`），或者等真实会话攒出来。
+```
+over-budget   47   ← 原描述 > 300 字符，压缩即可，风险最低
+title-like     7   ← 只有标题短语，需补全
+```
+
+覆盖表 `descriptions.json` 仍是空表（`tools: {}`），所以这 54 个现在都走"截断 + 进 pending"。
+
+**建议从 `over-budget` 那 47 个开始** —— 事实全在原文里，压缩风险最低。
+`title-like` 的 7 个要小心，可能落进 `INSUFFICIENT`。
 
 ## 九、参考
 
