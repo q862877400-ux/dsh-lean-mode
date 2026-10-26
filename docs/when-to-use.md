@@ -1,6 +1,8 @@
 # lean 模式：解决什么问题、该怎么用
 
 > 全部数字都是本机实测。口径写在各表下面。
+> **工具定义规范以 DSH 官方 `agent-experience` 为准**（`app/source/.agents/skills/agent-experience/SKILL.md`）。本文只讲本插件的呈现与用途；lean 特有的描述约束见 `docs/tool-description-style.md`。
+
 
 ---
 

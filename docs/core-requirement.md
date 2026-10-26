@@ -1,6 +1,8 @@
 # 对核心诉求的直接回答
 
 ## 诉求
+> **工具定义规范以 DSH 官方 `agent-experience` 为准**（`app/source/.agents/skills/agent-experience/SKILL.md`）。本文只讲本插件的呈现与用途；lean 特有的描述约束见 `docs/tool-description-style.md`。
+
 
 ```
 R1（硬）  1000+ 工具时，能【准确】调用工具

@@ -45,37 +45,45 @@
 ⇒ ★★ **schema 写得越全，lean 省得越多**；同时 **native 用户还拿到了完整精度**（枚举/嵌套/默认值/说明）。
 ⇒ ★ **「为 lean 把 schema 写瘦」是两头亏**：native 精度丢了，lean 也没得省。
 
-### ★★ 但实测暴露了这个规范自己的边界：「120 字符」是硬预算
+### ★★ 预算边界：300 字符
 
-v2 的 14 个描述里有 **4 个 150–196 字符 ⇒ 全部被截断**（我自己违反了第 2 条）。
+**300 字符 ≈ 150 个汉字 ≈ 50 个英文词**，绝大多数工具描述原样通过。
 
-⇒ **必须取舍**。120 字符 ≈ **60 个汉字** ≈ **20 个英文词**。优先级：
+这个上限是实测定的：第三方 Sciverse MCP 的描述中位 492 字符、100% 含换行、67% 带 `Use when:`，
+预算扫描显示 **250 是「不再丢决策段」的最小值**，取 300 留余量。
+
+**仍超 300 时**按这个优先级取舍（不是硬砍，是进 `pending` 等离线补写）：
 
 1. **干什么**（动词 + 对象）—— 不能省
 2. **必填参数的取值域**（枚举、单位）—— 最值钱
-3. 关键副作用（会不会改模型、会不会写盘）
+3. **何时用 / 排除项**（`Use when:` / `Not for:`）
+4. 关键副作用（会不会改模型、会不会写盘）
 
 ⇒ 放不下的，靠 **键名自带语义** 兜（`depth_mm`、`edge_ids`、`through_all`）。
-⇒ ★★ **三者同时做**：**肥 schema（native 用）+ 短促自足的第一句（lean 用）+ 自解释的键名（两边都用）**。
+⇒ ★★ **三者同时做**：**肥 schema（native 用）+ 自足描述（lean 用）+ 自解释的键名（两边都用）**。
 ---
 
 ## 一、lean 到底保留/丢弃什么（以下全部以插件源码为准）
 
-### 1. 工具描述 ⇒ `firstLine()`
+### 1. 工具描述 ⇒ `compressDescription()`
 
 ```js
-const cut = text.split(/[。\n]/)[0]      // ★ 在「。」或换行处断开
-return trimmed.length > 120 ? trimmed.slice(0, 120) + '…' : trimmed
+// v2：不切句，只折叠空白 + 词边界截断
+const text = String(description ?? '').replace(/\s+/g, ' ').trim()
+if (text.length <= maxChars) return text              // maxChars 默认 300
+const head = text.slice(0, maxChars)
+const space = head.lastIndexOf(' ')
+return (space > maxChars * 0.66 ? head.slice(0, space) : head).replace(/[,;:\s]+$/, '') + '…'
 ```
 
 | 保留 | 丢弃 |
 |---|---|
-| **第一句**（到第一个 `。` 或换行前） | 第一句之后的**一切** |
-| 最多 **120 字符** | 超出部分 |
+| **完整描述**（≤300 字符时） | 无 —— **原样通过** |
+| 超 300 时按 **词边界** 截到 300 | 超出部分（且进 `pending` 待补） |
 
-⚠ **注意**：`。`（中文句号）**会**截断，而 `.`（英文句点）**不会**。写中文描述时这是最容易踩的。
+⚠ **v2 不再按 `。` 或换行切句。** v1 的「中文句号会断句、英文句点不会」那个不对称已经消除。
 
-⇒ ★ **第一句必须自足**：写清「干什么 + 关键副作用 + 关键取值」。
+⇒ ★ **描述自足**：写清「干什么 + 关键副作用 + 关键取值」。超 300 就靠覆盖表。
 
 ### 2. 参数 schema ⇒ `shallowParameters()`
 
@@ -119,13 +127,13 @@ if (parameters.type !== 'object' || parameters.properties == null) return { type
 
 1. **顶层必须是** `type: "object"` **且带** `properties`。
    ⚠ 若你把参数包在 `oneOf`/`anyOf` 里、或根本不是 object ⇒ **lean 下参数信息全丢**（只剩 `{type:object}`）。
-2. **描述第一句自足、≤120 字符、不用** `。`**、不换行。**
-   ✅ `Creates an extruded boss; end_condition accepts blind, through_all. Depth is in mm.`（用 `;` 和 `.`）
-   ✗ `创建一个拉伸凸台。深度以毫米计。` ← 第二句全丢
+2. **描述自足、≤300 字符。** v2 不按标点切句，中文 `。` 和换行都不会被砍。
+   ✅ `Creates an extruded boss; end_condition accepts blind, through_all. Depth is in mm. Use when a solid body exists.`
+   ⚠ 超 300 ⇒ 进覆盖表 `descriptions.json`，别指望截断保留关键信息。
 3. **键名自带单位与语义**：`depth_mm` 优于 `depth` + 描述「单位毫米」。
-   （因为 per-property 的 description 在 lean 下会被丢弃）
+   （因为 per-property 的 description 在 lean 下会被丢弃 —— 这与 DSH 官方 `agent-experience` 的「parameter rules on the parameter」冲突，取舍见 `tool-description-style.md` §十）
 4. **`required` 老实标** —— 这是 lean 下**唯一**的必填信号。
-5. **枚举控制在 ≤12 个**；超过就把取值写进**第一句描述**。
+5. **枚举控制在 ≤12 个**；超过就把取值写进**描述**。
 6. **信封最多一层**：要么顶层拍平（推荐），要么老老实实一个 `params` 键。
    ✗ 最坏：`{"params": {"input": {…}}}` —— 模型得猜两层。
 7. ★ **别把入参写成 `$ref`**，除非你确认消费方的投影器会展开它。
@@ -136,15 +144,15 @@ if (parameters.type !== 'object' || parameters.properties == null) return { type
 ### ✅ 推荐（让两边都好吃）
 
 7. ★ **schema 写全**（枚举、嵌套、默认值、per-property 说明）—— **native 用户直接受益，lean 也省得更多**。
-8. ★ **把最关键的 2–3 条约束【冗余】进第一句描述**（因为属性描述会被丢）。
+8. ★ **把最关键的 2–3 条约束【冗余】进描述**（因为属性描述会被丢）。
    ✅ `Exports to STEP/IGES/Parasolid/STL; units one of mm, cm, inch, m; tolerance is chord height in mm.`
-9. ★ **避免纯数组/纯嵌套参数**；实在要，**把元素结构写进第一句描述**。
+9. ★ **避免纯数组/纯嵌套参数**；实在要，**把元素结构写进描述**。
    ✅ `edge_ids must be an array of edge names such as Edge1.`
 
 ### ❌ 别做
 
 10. ✗ 为了配合 lean 把 schema 拍平 —— **native 精度丢了，lean 也没得省**。
-11. ✗ 把关键信息只放在**第二句之后**，或只放在 per-property 的 `description` 里。
+11. ✗ 把关键信息只放在 per-property 的 `description` 里（lean 下会被丢）。
 12. ✗ 一个工具塞进 >12 个枚举值（会被整个丢掉，模型只能瞎猜）。
 
 ---
@@ -153,11 +161,24 @@ if (parameters.type !== 'object' || parameters.properties == null) return { type
 
 它会对每个工具报：
 
-- 描述是否含 `。`/换行、是否 >120 字符
-- 顶层是否 object+properties
-- 是否有 >12 枚举、嵌套 object、数组、缺 `type`、`oneOf`/`anyOf`
+- **真实损害**（违规）：顶层非 object+properties、枚举 >12、缺 `type`、`oneOf`/`anyOf`、`type` 是数组
+- **待补清单**：哪些工具会被插件判进 `pending`（`empty`/`too-short`/`argblock`/`typename`/`title-like`/`over-budget`）
+- **超 300 字符**的描述（会被截断 ⇒ 应写进覆盖表）
 - **字节账**：native 合计 vs lean 通道+目录，以及**比值**
 - **lean 目录行长什么样**（逐条打印）
+
+文风项（动词开头、句号收尾、参数有描述…）**只提醒不判失败** —— 那是「怎么写更好」，不是「写错了」。
+
+---
+
+## 三点五、与 DSH 官方规范的关系
+
+工具定义的**规范源头是 DSH 官方** `app/source/.agents/skills/agent-experience/SKILL.md`，本文只讲 **lean 呈现层**的额外约束。
+
+**一处已知冲突**：官方要求「parameter rules on the parameter」（默认值/范围/配对写进该参数的 description），但 lean 的 `shallowParameters` **丢弃 per-property description**。
+
+⇒ 本文建议「键名自带语义」是对这个冲突的**适配**，不是新规范。
+⇒ 完整取舍判据见 `docs/tool-description-style.md` §十。
 
 ---
 

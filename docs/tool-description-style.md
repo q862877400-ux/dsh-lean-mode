@@ -38,7 +38,7 @@
 | 句数 | **中位 2 句** |
 | 参数描述长度 | 中位 **55 字符** |
 | 参数描述结尾 | **100% 句号收尾** |
-| ★ 超过 120 字符的工具描述 | **38/72 = 53%** |
+| ★ 官方中位 vs lean 上限 | **139 字符 vs 300** ⇒ 绝大多数官方描述原样通过，零损失 |
 
 ### 官方模板（归纳自 72 个实例）
 
@@ -75,42 +75,47 @@
 
 ---
 
-## 二、★★★ 语言选英文（这条最省事也最要命）
+## 二、语言选英文（理由在 v2 变了，结论不变）
 
-lean 的 `firstLine()` 是这么切的：
+`compressDescription()` 只做两件事：
 
 ```js
-const cut = text.split(/[。\n]/)[0]     // ★ 只在「。」或换行处断
-return trimmed.length > 120 ? trimmed.slice(0, 120) + '…' : trimmed
+text = String(description ?? '').replace(/\s+/g, ' ').trim()   // 折叠空白
+if (text.length <= maxChars) return text                        // 未超上限原样返回
+// 超了才按词边界截断；中文没有空格，则硬切
+return body.replace(/[,;:\s]+$/, '') + '…'
 ```
 
-⇒ ★★ **`。`（中文句号）会断句，`.`（英文句点）不会。**
+⇒ ★ **中英文在截断规则上已经完全对称。** 写中文不会被句号砍，也不会因为换行被砍。
 
-| 描述语言 | lean 下实际保留 |
-|---|---|
-| **英文**（用 `.` 断句） | ★ **不断句，整体保留到 120 字符**才硬截 |
-| **中文**（用 `。` 断句） | ★★ **第一个 `。` 就断**（通常只剩 30–50 字符） |
+**那为什么仍建议英文？** 三条与截断无关的理由：
 
-⇒ ★★★ **同样是两句描述，英文能活 120 字符、中文只能活第一句。** 中文在 lean 下损失大得多。
-⇒ ★ 官方**本来就是英文**，所以**照官方写法用英文** = 一举两得。
+1. **官方 72 个工具全是英文**，工具集混语言会让模型在语言切换上耗注意力
+2. **`maxChars` 数的是 `.length`**：300 个汉字 = 300 个字符，但 token 数远高于 300 个 ASCII 字符 ⇒ **同样预算下中文塞的语义更多，也更快撞上 token 成本**
+3. **照官方范文写**能直接复用它的结构（见 §七 范文库）
 
-⚠ 如果你**必须**写中文：**第一句里塞满关键信息**，并且**不要用 `。`**（改用 `，` / `；`）。
+⚠ 如果你**必须**写中文：`。` 和换行都不再有害，放心用；但要留意 **300 字符中文的信息量远大于 300 字符英文**。
 
 ---
 
-## 三、前 120 字符怎么分配（lean 的硬预算）
+## 三、300 字符怎么分配（lean 的预算）
 
-官方中位 139 字符 > 120 ⇒ ★ **官方风格过半会被截**。所以按这个优先级塞：
+官方中位 139 字符 < 300 ⇒ ★ **绝大多数官方描述原样通过，零损失**。超出 300 的才按这个优先级取舍：
 
 | 优先级 | 内容 | 例 |
 |---|---|---|
 | 1 | **动词 + 对象** | `Creates an extruded boss…` |
 | 2 | **必填参数的取值域** | `end_condition is blind, through_all, up_to_next or up_to_vertex` |
-| 3 | **何时用 / 调用前提** | `Call only after opening a document` |
-| 4 | **副作用** | `Writes to disk; overwrites an existing file` |
+| 3 | **何时用 / 调用前提**（`Use when:`） | `Use when a solid body already exists` |
+| 4 | **排除项**（`Not for:`） | `Not for surface modelling` |
+| 5 | **副作用** | `Writes to disk; overwrites an existing file` |
+
+⇒ 超过 300 的工具**不会硬砍了事**：`needsCuration()` 判为 `over-budget` ⇒ 进 `descriptions.pending.json` 等离线补写（见 §八）。
 
 ⇒ 放不下的靠 **键名自带语义**（`depth_mm`、`through_all`、`dry_run`）兜，
 ⇒ 以及 **肥 schema**（枚举/嵌套/默认值/per-property 说明）—— native 用户看得到，lean 也省得更多。
+
+⚠ **但要注意这条与 DSH 官方规范的冲突**：官方 `agent-experience` 要求「parameter rules on the parameter」（默认值/范围/配对写进该参数的 description），而 **lean 的 `shallowParameters` 会丢弃 per-property description**。取舍判据见 §十。
 
 ---
 
@@ -121,15 +126,15 @@ return trimmed.length > 120 ? trimmed.slice(0, 120) + '…' : trimmed
 - [ ] 语言 = **英文**
 - [ ] **动词开头**（List / Read / Create / Execute / Search / Add / …）
 - [ ] **句号收尾**
-- [ ] **前 120 字符内**已含：做什么 + 必填取值域 + 何时用
-- [ ] 中文描述：**无 `。`、无换行**（否则被截）
-- [ ] 不在描述里换行
+- [ ] **前 300 字符内**已含：做什么 + 必填取值域 + 何时用
+- [ ] 超过 300 → 写进覆盖表，别指望截断保留关键信息
+- [ ] 不在描述里换行（v2 会折叠成空格，不报错但会变一行）
 
 **参数**
 
 - [ ] **每个参数都有** `description`（lean 会丢，但 native 用户需要）
 - [ ] 参数描述**句号收尾**、**含默认值**（`defaults to X`）、**含范围/单位**
-- [ ] 键名**自带单位/语义**（`depth_mm` 而不是 `depth`）
+- [ ] 键名**自带单位/语义**（`depth_mm` 而不是 `depth`）—— 因为 lean 下参数描述会被丢
 - [ ] `required` 老实标（lean 下唯一的必填信号）
 - [ ] 枚举 **≤12 个**（超了会被整个丢掉）
 - [ ] 无 `oneOf`/`anyOf`（会被丢掉）
@@ -148,20 +153,40 @@ return trimmed.length > 120 ? trimmed.slice(0, 120) + '…' : trimmed
 node tools/lean-lint.mjs --mcp path/to/server.mjs
 ```
 
-会报：描述是否含 `。`/换行/超 120、顶层是否 object、枚举是否 >12、是否嵌套/数组/缺 type/oneOf，
-以及**字节账与比值**和**lean 目录的逐行原文**。
+会报：**真实损害**（顶层非 object、枚举 >12、缺 type、`oneOf`/`anyOf`、type 数组）、
+**待补清单**（哪些工具会被插件判定进 `pending`，按 `empty`/`too-short`/`argblock`/`typename`/`title-like`/`over-budget` 分类）、
+**字节账与比值**、以及 **lean 目录的逐行原文**。
+
+文风项（动词开头、句号收尾、参数有描述…）**只提醒，不判失败** —— 它们是"怎么写更好"，不是"写错了"。
 
 ---
 
-## 六、★ 一个必须知道的限度（关于本插件的 120 截断）
+## 六、描述处理的现行机制
 
-官方 **53% 的工具描述 > 120 字符**，而它们的**第二句**装的正是「何时用 / 调用前提 / 副作用」——
-⇒ ★★ **lean 会把官方一半以上工具的关键决策信息砍掉。**
+| 环节 | 现行行为 |
+|---|---|
+| 函数 | **`compressDescription()`** |
+| 切句 | **不切句** —— 只折叠空白 |
+| 上限 | **300 字符（`DEFAULT_MAX_CHARS`）** |
+| 超限处理 | **词边界截断**（中文无空格则硬切），末尾加 `…` |
+| 覆盖表 | **`descriptions.json`**，三态（active/quarantine/deprecated）+ `basedOn` 双哈希 |
+| 超限长描述 | **进 `descriptions.pending.json` 等离线补写**，不硬砍了事 |
+| 目录区（`catalog:'full'`） | **独立预算 120 字符**（指令区越短越遵循），与 300 无关 |
 
-这很可能就是实测 **端到端 89.9% vs native 95.0%** 那 5 个点差距的一部分来源。
+**为什么是 300**（实测依据）：
 
-⇒ ★ **可调的改进方向**（尚未实现）：把 `firstLine` 的 120 改成可配置，或让**通道里保留完整描述**、只让目录用一行索引。
-⇒ 代价：token 会回升。**这是一个可以实测的取舍**，不该拍脑袋定。
+| 样本 | 工具数 | 描述长度中位 | 含换行 | 带 `Use when`/`Not for` |
+|---|---:|---:|---:|---:|
+| 自制 SolidWorks MCP | 524 | **71** | 1 个 | 几乎无 |
+| 第三方 Sciverse MCP | 6 | **492** | **100%** | 67% / 50% |
+
+**两个样本中位差 7 倍，分布是双峰的。** 预算扫描（Sciverse 样本）显示：**250 是「不再丢 `Use when`/`Not for`」的最小值**，取 300 留余量。
+
+⇒ ★ **≤300 的工具（如 SolidWorks 全部）：原样通过，零损失。**
+⇒ ★ **>300 的工具（如 Sciverse 5/6）：不被硬砍，进覆盖表由离线流程压缩。**
+⇒ ★ 实测：压缩后仍含 `Use when` 的有 **4 条**。
+
+**仍然存在的限度**：覆盖表目前是空的（`tools: {}`），所以 >300 的工具暂时仍是"被截断 + 进 pending"，直到离线补表跑过。见 §八。
 
 ---
 
@@ -323,3 +348,46 @@ Optional short heading for the question, such as "Confirm" or "Choose Mode".
 **只花 11 KB 买「几百个工具全可见」**，这就是你要的东西。
 ⇒ ★ **`lean` 档 = 通道砍到 0.619×** ⇒ 上下文吃紧时才用，**且目录同样是瘦的**（不再破坏指令区）。
 ⇒ ⚠ **注意 lean 的真实比值是 0.619，不是早期说的 0.247** —— 后者量自**特别肥**的 MCP schema。
+
+---
+
+## 十、★★★ 与 DSH 官方 `agent-experience` 的对齐与冲突
+
+> **工具定义规范以 DSH 官方为准**：`app/source/.agents/skills/agent-experience/SKILL.md`
+> 本文只讲 **lean 呈现层**的额外约束，不重复、也不覆盖官方规范。
+
+### 10.1 官方怎么说
+
+`agent-experience` 的 `## Tool definitions` 五条，逐字：
+
+| # | 官方原文 | 中文 |
+|---|---|---|
+| 1 | **Delete obvious constraints.** Omit rules the model learns from the call result | 删掉模型从调用结果就能学到的约束 |
+| 2 | **Describe behavior, not implementation.** | 描述行为，不描述实现 |
+| 3 | **Put parameter rules on the parameter.** Defaults, ranges, pairing, and when-to-set rules belong in that parameter's description or schema | **默认值/范围/配对/何时设 → 写在该参数的 description 或 schema 里** |
+| 4 | **Say each fact once.** | 每个事实只说一次 |
+| 5 | **Measure the change.** Compare first-turn prompt tokens before and after | 改动前后量首轮 token |
+
+### 10.2 ⚠ 冲突：第 3 条 vs lean 的 `shallowParameters`
+
+**官方要求把参数规则写在参数上；lean 的浅投影会把 per-property `description` 整个丢掉。**
+
+`shallowParameters()` 只保留：顶层键名 / 每键 `type` / `enum`（≤12）/ `required`。
+**丢弃**：每个属性自己的 `description`、默认值、`pattern`、`minimum`/`maximum`、`format`、`oneOf`/`anyOf`、数组 `items`、嵌套结构。
+
+⇒ **同一份工具定义，native 用户看得到参数规则，lean 用户看不到。**
+
+### 10.3 取舍判据（出现冲突时按这个选）
+
+| 情形 | 怎么做 |
+|---|---|
+| **约束是「模型必须知道才能调对」**（枚举取值、单位、互斥关系） | ★ **冗余进工具描述**，别只放在参数上 |
+| **约束是「写错了会报错，错误信息能自解释」** | 留给参数 / 留给运行时校验，**不要进描述**（官方第 1 条） |
+| **默认值** | 参数 `description` 写 `defaults to X`（native 受益）；**若该值影响模型决策，再在工具描述里提一句** |
+| **纯实现细节**（内部字段名、序列化格式） | 两边都不写（官方第 2 条） |
+| **同一事实** | **只写一处**（官方第 4 条）—— 冗余仅限上面「必须知道」那一类 |
+
+### 10.4 一句话
+
+**lean 不是另一套规范，是同一套规范在「信息会丢」这个约束下的适配。**
+写工具定义照 `agent-experience`；只有当你确认某条信息会被 lean 丢掉、且模型丢了就调不对时，才把它冗余到描述里——**并且接受「同一个事实说了两遍」这个代价**。

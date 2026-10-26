@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "version": 1,
+    "maxChars": 300,
+    "updated": "2026-10-26",
+    "note": "工具描述覆盖表。命中 active 且 basedOn 哈希匹配则用 desc；否则回落压缩。pending 由插件自动写入，供离线 skill 补表。表只增不减：条目用 status 表达生命周期，不删除。"
+  },
+  "tools": {},
+  "pending": {}
+}

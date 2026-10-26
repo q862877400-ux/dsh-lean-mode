@@ -110,6 +110,20 @@ export function apply(ctx, config) {
 - ★ 端到端准确率（89.9% vs 95.0%）是那批题上的**单轮**数字。
 - ★ 目录**会把每个工具的一句用途重复一遍** ⇒ 省得多不多，取决于**参数有多大**，而不只是工具数量。
 
+## 写工具定义
+
+**面向模型的工具定义规范（名称 / 描述 / 参数 schema）以 DSH 官方 `agent-experience` 技能为准** —— `app/source/.agents/skills/agent-experience/SKILL.md`。本插件不另立标准。
+
+下面这些文档只讲**叠在它上面的 lean 呈现层**：
+
+| 文档 | 什么时候读 |
+|---|---|
+| `docs/tool-description-style.md` | 写描述时；§十 讲与 `agent-experience` 的唯一实质冲突 |
+| `docs/authoring-mcp-tools.md` | 在 lean 下写 MCP 工具时 |
+| `docs/when-to-use.md` | 选三档呈现时 |
+| `skills/lean-tool-presentation/SKILL.md` | 上面全部的面向 Agent 摘要 |
+
+**机械检查**：`node tools/lean-lint.mjs tools.json` —— 报真实信息损失、待补清单、字节账。
 ## 许可
 
 MIT，见 [LICENSE](LICENSE) 与 [THIRD-PARTY.md](THIRD-PARTY.md)。

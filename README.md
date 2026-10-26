@@ -111,6 +111,22 @@ It uses **only upstream APIs** — no new `tools.mode` value, no patched package
 - ★ End-to-end accuracy (89.9% vs 95.0%) is a **single-run** figure on that task set.
 - ★ The catalogue **repeats each tool's one-line purpose**, so the win grows with the **size of the parameters**, not merely the count of tools.
 
+## Writing tool definitions
+
+**The normative source for model-facing tool definitions (name / description / parameter schema) is DSH's own [`agent-experience`](https://github.com/deepseek-ai) skill** — `app/source/.agents/skills/agent-experience/SKILL.md`. This plugin does not define a competing standard.
+
+Use the docs below only for the **lean presentation layer** on top of it:
+
+| Doc | Read it when |
+|---|---|
+| [`docs/tool-description-style.md`](docs/tool-description-style.md) | Writing descriptions; §10 covers the one real conflict with `agent-experience` |
+| [`docs/authoring-mcp-tools.md`](docs/authoring-mcp-tools.md) | Authoring MCP tools for DSH under lean |
+| [`docs/when-to-use.md`](docs/when-to-use.md) | Deciding which of the three presentation tiers to use |
+| [`docs/core-requirement.md`](docs/core-requirement.md) | Why the plugin exists |
+| [`skills/lean-tool-presentation/SKILL.md`](skills/lean-tool-presentation/SKILL.md) | Agent-facing summary of all of the above |
+
+**Check your tools mechanically:** `node tools/lean-lint.mjs tools.json` — reports real information loss, the pending-curation list, and the byte ledger.
+
 ## License
 
 MIT. See [LICENSE](LICENSE) and [THIRD-PARTY.md](THIRD-PARTY.md) — `cordis.patch.yml` restates a preset composition from DeepSeek Harness (MIT, Copyright (c) 2026 DeepSeek); the plugin source is original.

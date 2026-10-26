@@ -7,12 +7,41 @@
  * 问「这个会话用的是哪个 preset」。是配置里点名的那个才变换，否则原样放行。
  *
  * 因此它【不需要修改任何核心包】：不新增 mode 枚举、不碰 dsh-tools。
+ *
+ * ── 描述表示（v2）─────────────────────────────────────────────────────
+ * 工具描述是第三方写的文档（MCP 由 `mcp-client/src/tools.ts` 原样透传
+ * `tool.description`），lean 只能对它做有损压缩。v1 用 `split(/[。\n]/)` 取第一句，
+ * 这个假设只对「手写、单句、动词开头」的描述成立。
+ *
+ * 实测（2026-10-25）：
+ *   · 自制 SolidWorks MCP（542 工具）：描述中位 71 字符，1 个含换行 ⇒ 几乎无损
+ *   · 第三方 Sciverse MCP（6 工具）：描述中位 492 字符，6/6 含换行，
+ *     67% 带 `Use when:`、50% 带 `Not for:` ⇒ v1 砍掉 67% 的决策段
+ *
+ * v2 的做法：
+ *   1. 不再按句切分，只按 maxChars 做词边界截断（默认 300：实测 250 是不再丢
+ *      `Use when`/`Not for` 的最小值）。
+ *   2. 覆盖表 descriptions.json：命中则用人工/离线 LLM 维护的短描述，长度可控。
+ *   3. 覆盖表带 basedOn 哈希：上游描述或 schema 变了自动 quarantine 并回落，
+ *      绝不用一句可能过时的话骗模型。
+ *   4. 未覆盖且「压缩会损坏」的工具自动进 pending 清单（带完整事实），供离线
+ *      skill 补表 —— 运行时零模型调用，确定性。
  */
+
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const name = 'lean-mode'
 
 /** systemPrompt：监听装配。agentPresets 走 ctx.get（可选，拿不到就作用于全部会话）。 */
 export const inject = ['systemPrompt']
+
+const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
+
+/** 描述字符上限。250 是实测「不再丢 Use when/Not for」的最小值，取 300 留余量。 */
+export const DEFAULT_MAX_CHARS = 300
 
 const CATALOG_SECTION = 'tools:catalog'
 const CATALOG_HEADER = [
@@ -23,21 +52,59 @@ const CATALOG_HEADER = [
   '★ 不要凭记忆猜参数 —— 用错工具或漏参数比多看一眼定义贵得多。',
 ].join('\n')
 
+// ────────────────────────────────────────────────────────────────
+// 描述压缩
+// ────────────────────────────────────────────────────────────────
+
 /**
- * 描述压缩到一行。
- * ★ 在【词边界】截断 —— 早期版本在 120 处硬切字符，会把单词切成两半
- *   （官方 pwsh 的 "pass" 被切成 "p"+"s"、run_code 的 "function" 被切成 "f"+"ction"），
- *   模型读到破碎英文，是准确率损失的来源之一。
+ * 把一段描述压到 `maxChars` 以内。
+ *
+ * 不再按 `。` 或换行切句 —— 那种切法对英文零收益（`.` 根本不在此列），
+ * 对中文和结构化描述是纯损害（第三方 MCP 的描述 100% 含换行）。
+ * 只在【词边界】截断：早期版本在固定位置硬切会把单词切成两半
+ * （官方 pwsh 的 "pass" 被切成 "p"+"s"），模型读到破碎英文。
+ *
+ * @param description 原始描述。
+ * @param maxChars 字符上限。
+ * @returns 压成单行的描述；未超上限时原样（仅折叠空白）。
  */
-export function firstLine(description) {
-  const text = String(description == null ? '' : description)
-  const trimmed = (text.split(/[。\n]/)[0] || '').trim()
-  if (trimmed.length <= 120) return trimmed
-  const head = trimmed.slice(0, 120)
+export function compressDescription(description, maxChars = DEFAULT_MAX_CHARS) {
+  const text = String(description == null ? '' : description).replace(/\s+/g, ' ').trim()
+  if (text.length <= maxChars) return text
+  const head = text.slice(0, maxChars)
   const space = head.lastIndexOf(' ')
-  const body = space > 80 ? head.slice(0, space) : head   // 回退到词边界，但最多只让出 40 字符
+  // 只在空格足够靠后时退到词边界，否则硬切（中文没有空格）。
+  const body = space > maxChars * 0.66 ? head.slice(0, space) : head
   return body.replace(/[,;:\s]+$/, '') + '…'
 }
+
+/**
+ * 判断一个工具的描述是否需要离线补表。
+ *
+ * 只覆盖「压缩会损坏语义」的形态。`title-like` 的判据来自实测：
+ * SolidWorks MCP 的 32 个 title-only 工具是唯一命中的真实样本。
+ *
+ * @param tool 含 name / description 的工具。
+ * @param maxChars 字符上限；超限的工具也需要改写。
+ * @returns 命中原因，或 `null` 表示无需处理。
+ */
+export function needsCuration(tool, maxChars = DEFAULT_MAX_CHARS) {
+  const orig = String(tool?.description == null ? '' : tool.description).trim()
+  if (orig === '') return 'empty'
+  if (orig.length < 15) return 'too-short'
+  if (/^(Args|Returns|Parameters|Raises|Note|Example)s?:/i.test(orig)) return 'argblock'
+  // 单个 CamelCase 标识符当描述（`MetricsQueryRequest`），模型只知道类型名。
+  if (/^[A-Z][A-Za-z0-9]{3,}$/.test(orig)) return 'typename'
+  // 标题式短语：全英文 Title Case 且没有句末标点。
+  if (/^[A-Z][A-Za-z0-9\s,'()/-]+$/.test(orig) && !/[.!?。]$/.test(orig)) return 'title-like'
+  // 结构化长描述：压缩会切掉 `Use when` / `Not for` 这类决策段。
+  if (orig.replace(/\s+/g, ' ').trim().length > maxChars) return 'over-budget'
+  return null
+}
+
+// ────────────────────────────────────────────────────────────────
+// JSON Schema 浅投影
+// ────────────────────────────────────────────────────────────────
 
 /**
  * 把一个 JSON Schema 里的 `$ref` 就地展开到它指向的 `$defs` 条目。
@@ -57,7 +124,11 @@ function resolveRef(node, root) {
   return cursor == null ? {} : cursor
 }
 
-/** 把一个 JSON schema 投影成顶层契约。 */
+/**
+ * 把一个 JSON schema 投影成顶层契约。
+ * @param parameters 工具的 `parameters` schema。
+ * @returns 只保留顶层键、类型、enum（≤12）与 required 的 schema。
+ */
 export function shallowParameters(parameters) {
   if (parameters == null || parameters.type !== 'object' || parameters.properties == null) return { type: 'object' }
   const required = Array.isArray(parameters.required) ? parameters.required : []
@@ -82,6 +153,157 @@ export function shallowParameters(parameters) {
   return out
 }
 
+// ────────────────────────────────────────────────────────────────
+// 覆盖表
+// ────────────────────────────────────────────────────────────────
+
+/** 稳定序列化：键排序，保证同一 schema 的哈希不随插入顺序变化。 */
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null)
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']'
+  const keys = Object.keys(value).sort()
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') + '}'
+}
+
+/** 取 16 位十六进制摘要，用于 basedOn 比对。 */
+export function digest(value) {
+  return createHash('sha256').update(String(value)).digest('hex').slice(0, 16)
+}
+
+/** 解析配置里的表路径：相对路径按插件目录解析。 */
+function tablePath(spec, fallbackName) {
+  const raw = typeof spec === 'string' && spec.trim() !== '' ? spec.trim() : fallbackName
+  return isAbsolute(raw) ? raw : join(PLUGIN_DIR, raw)
+}
+
+/** 工具的 schema 签名，用于识别「同名但定义变了」。 */
+export function schemaSignature(parameters) {
+  return digest(stableStringify(parameters ?? {}))
+}
+
+/**
+ * 工具描述覆盖表 + 待补清单。
+ *
+ * 三种条目状态：
+ *   · `active`     —— 哈希匹配则使用
+ *   · `quarantine` —— 哈希失配，回落到压缩，进 pending 等重写
+ *   · `deprecated` —— 不参与匹配，条目保留（表只增不减）
+ */
+export class DescriptionTable {
+  constructor({ path, pendingPath, logger, maxChars = DEFAULT_MAX_CHARS }) {
+    this.path = path
+    this.pendingPath = pendingPath
+    this.logger = logger
+    this.maxChars = maxChars
+    this.tools = {}
+    this.pending = {}
+    this.flushTimer = undefined
+  }
+
+  load() {
+    try {
+      if (!existsSync(this.path)) return this
+      const parsed = JSON.parse(readFileSync(this.path, 'utf8'))
+      if (parsed?.tools !== null && typeof parsed?.tools === 'object') this.tools = parsed.tools
+      if (parsed?.pending !== null && typeof parsed?.pending === 'object') this.pending = parsed.pending
+    } catch (error) {
+      // 表损坏不能让整个装配失败：退化成「全部走压缩」仍然可用。
+      this.logger?.warn?.(`lean-mode: 描述覆盖表读取失败，全部走压缩: ${String(error)}`)
+    }
+    return this
+  }
+
+  /** 记入待补清单，附带完整事实供离线 skill 使用。 */
+  markPending(tool, reason) {
+    const prev = this.pending[tool.name]
+    const today = new Date().toISOString().slice(0, 10)
+    if (prev !== undefined && prev.reason === reason && prev.description === String(tool.description ?? '')) return
+    this.pending[tool.name] = {
+      reason,
+      description: String(tool.description == null ? '' : tool.description),
+      parameters: tool.parameters ?? { type: 'object' },
+      firstSeen: prev?.firstSeen ?? today,
+      lastSeen: today,
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * 解析一个工具应当使用的描述。
+   *
+   * @param tool 含 name / description / parameters 的工具。
+   * @returns `{ text, origin }`；origin 用于诊断。
+   */
+  resolve(tool) {
+    const fallback = compressDescription(tool.description, this.maxChars)
+    const entry = this.tools[tool.name]
+
+    if (entry === undefined) {
+      const reason = needsCuration(tool, this.maxChars)
+      if (reason !== null) this.markPending(tool, reason)
+      return { text: fallback, origin: 'compress' }
+    }
+    if (entry.status !== undefined && entry.status !== 'active') {
+      return { text: fallback, origin: `compress:${entry.status}` }
+    }
+
+    // 上游变了就隔离：宁可回落到有损压缩，也不用可能过时的话骗模型。
+    const basedOn = entry.basedOn
+    if (basedOn !== undefined && basedOn !== null) {
+      const descChanged = typeof basedOn.descHash === 'string'
+        && basedOn.descHash !== digest(String(tool.description ?? ''))
+      const schemaChanged = typeof basedOn.schemaHash === 'string'
+        && basedOn.schemaHash !== schemaSignature(tool.parameters)
+      if (descChanged || schemaChanged) {
+        entry.status = 'quarantine'
+        this.markPending(tool, descChanged ? 'stale-description' : 'stale-schema')
+        this.scheduleFlush()
+        this.logger?.warn?.(`lean-mode: 工具 ${tool.name} 上游已变更，覆盖表条目转入 quarantine`)
+        return { text: fallback, origin: 'compress:stale' }
+      }
+    }
+
+    return { text: compressDescription(entry.desc, this.maxChars), origin: 'table' }
+  }
+
+  /** 延迟落盘，避免每次装配都写文件。 */
+  scheduleFlush() {
+    if (this.flushTimer !== undefined) return
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined
+      this.flush()
+    }, 2000)
+    this.flushTimer.unref?.()
+  }
+
+  /** 立即落盘。 */
+  flush() {
+    try {
+      const payload = {
+        _meta: { version: 1, maxChars: this.maxChars, updated: new Date().toISOString().slice(0, 10) },
+        tools: this.tools,
+        pending: this.pending,
+      }
+      writeFileSync(this.pendingPath, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+    } catch (error) {
+      this.logger?.warn?.(`lean-mode: 覆盖表落盘失败: ${String(error)}`)
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
+// 装配
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * `catalog: 'full'` 模式下，目录行里那条描述的字符上限。
+ *
+ * ⚠ **这与 `maxChars`（工具通道，默认 300）是两个独立预算，别混。**
+ * 目录进的是【系统提示词】的指令区，越短小精确、遵循度越好；
+ * 工具通道进的是结构化 `tools` 字段，可以放宽到 300 以免丢掉 `Use when:`/`Not for:`。
+ */
+const CATALOG_DESC_CHARS = 120
+
 function catalogLine(tool) {
   const p = tool.parameters || {}
   const props = p.properties || {}
@@ -90,7 +312,7 @@ function catalogLine(tool) {
   const shape = keys.length === 0
     ? '{}'
     : '{' + keys.map(k => JSON.stringify(k) + (required.has(k) ? ': …' : '?: …')).join(', ') + '}'
-  return '- ' + tool.name + ' ← 实参写成 ' + shape + ' // ' + firstLine(tool.description)
+  return '- ' + tool.name + ' ← 实参写成 ' + shape + ' // ' + compressDescription(tool.description, CATALOG_DESC_CHARS)
 }
 
 /**
@@ -106,34 +328,106 @@ function catalogBody(tools, full) {
   return CATALOG_HEADER + '\n\n' + tools.map(t => '- ' + t.name).join('\n')
 }
 
-/** 这次装配属于哪个 preset（拿不到就当没命中）。 */
-function presetOf(ctx, scope) {
+/**
+ * 这次装配属于哪个 preset。
+ *
+ * 取 Agent context 的顺序（正式字段优先）:
+ *   1. `context.agent.ctx` —— `assembleContextFor()` 的正式返回字段
+ *      (`packages/core/agent/src/dispatch.ts`: `{ agent, scope: agent }`)。
+ *   2. `scope.ctx` —— 历史路径。真实装配里 `scope` 恰好是 Agent 实例，而 Agent
+ *      有 `readonly ctx`；但 `ScopeKey` 的类型只是 `object`
+ *      (`packages/core/scope/src/index.ts`)，该路径没有类型契约保证，故仅兜底。
+ *
+ * 拿不到时不能静默放行 —— 否则 Lean 模式不生效却没有任何迹象。
+ */
+function presetOf(ctx, context) {
   const registry = ctx.get('agentPresets')
-  if (registry == null || scope == null) return undefined
-  const agentCtx = scope.ctx
-  if (agentCtx == null) return undefined
-  try { return registry.composedPreset(agentCtx) } catch { return undefined }
+  const agent = context?.agent ?? context?.scope
+  if (registry == null || agent == null) {
+    ctx.logger?.warn?.(
+      'lean-mode: agentPresets 或装配 subject 不可用，本次装配未变换'
+      + ` (registry=${registry == null ? 'missing' : 'ok'}, agent=${agent == null ? 'missing' : 'ok'})`,
+    )
+    return undefined
+  }
+  const agentCtx = agent.ctx ?? agent
+  try {
+    return registry.composedPreset(agentCtx)
+  } catch (error) {
+    ctx.logger?.warn?.(`lean-mode: composedPreset 查询失败，本次装配未变换: ${String(error)}`)
+    return undefined
+  }
 }
 
+/**
+ * 把一条工具投影成 lean 形态。
+ * @param tool 原始工具。
+ * @param table 覆盖表；`undefined` 表示未启用。
+ * @param fallbackMode `compress` | `original` | `empty`。
+ */
+function projectTool(tool, table, fallbackMode) {
+  const resolved = table === undefined ? undefined : table.resolve(tool)
+  const origin = resolved?.origin ?? 'compress'
+  let description
+  if (origin === 'table') {
+    description = resolved.text
+  } else if (fallbackMode === 'empty') {
+    description = ''
+  } else if (fallbackMode === 'original') {
+    description = String(tool.description == null ? '' : tool.description)
+  } else {
+    description = resolved === undefined ? compressDescription(tool.description) : resolved.text
+  }
+  return {
+    name: tool.name,
+    description,
+    parameters: shallowParameters(tool.parameters),
+    // `deferLoading` 是官方 ToolSchema 的正式字段
+    // (`packages/core/system-prompt/src/index.ts` L642-647 显式保留)；
+    // 丢掉会让该工具失去「延迟激活」语义。
+    ...tool.deferLoading === true ? { deferLoading: true } : {},
+  }
+}
+
+/**
+ * 注册 lean 呈现。
+ *
+ * @param ctx 插件 context（profile 层）。
+ * @param config 见 `cordis.patch.yml` 的 `lean-mode` 行。
+ */
 export function apply(ctx, config) {
   const settings = config || {}
   const wanted = Array.isArray(settings.presets) && settings.presets.length > 0 ? settings.presets : undefined
   const withCatalog = settings.catalog !== false
   const withShape = settings.shape !== false
+  const maxChars = Number.isInteger(settings.maxChars) && settings.maxChars > 0 ? settings.maxChars : DEFAULT_MAX_CHARS
+  const fallbackMode = settings.fallback === 'original' || settings.fallback === 'empty' ? settings.fallback : 'compress'
+
+  let table
+  if (settings.descriptions !== false) {
+    table = new DescriptionTable({
+      path: tablePath(settings.table, 'descriptions.json'),
+      pendingPath: tablePath(settings.pending, 'descriptions.pending.json'),
+      logger: ctx.logger,
+      maxChars,
+    }).load()
+  }
+
   ctx.on('system-prompt/assemble', async (assembly, context, next) => {
     const base = await next()
     if (base == null || !Array.isArray(base.tools) || base.tools.length === 0) return base
     if (wanted !== undefined) {
-      const preset = presetOf(ctx, context == null ? undefined : context.scope)
+      const preset = presetOf(ctx, context)
       if (preset === undefined || wanted.indexOf(preset) < 0) return base
     }
-    const tools = withShape
-      ? base.tools.map(t => ({ name: t.name, description: firstLine(t.description), parameters: shallowParameters(t.parameters) }))
-      : base.tools
+    const tools = withShape ? base.tools.map(tool => projectTool(tool, table, fallbackMode)) : base.tools
     if (!withCatalog) return Object.assign({}, base, { tools })
     if ((base.sections || []).some(s => s.name === CATALOG_SECTION)) return Object.assign({}, base, { tools })
     const order = ctx.systemPrompt.getSectionOrder('TOOLS_SDK')
     const body = catalogBody(tools, settings.catalog === 'full')
     return Object.assign({}, base, { tools, sections: base.sections.concat([{ name: CATALOG_SECTION, order, interpolate: false, text: body }]) })
   })
+
+  // 卸载前把待补清单落盘，避免 debounce 计时器被丢弃。
+  ctx.effect?.(() => () => table?.flush(), 'lean-mode.flush')
 }
