@@ -169,7 +169,7 @@ node tools/lean-lint.mjs --mcp path/to/server.mjs
 | 切句 | **不切句** —— 只折叠空白 |
 | 上限 | **300 字符（`DEFAULT_MAX_CHARS`）** |
 | 超限处理 | **词边界截断**（中文无空格则硬切），末尾加 `…` |
-| 覆盖表 | **`descriptions.json`**，三态（active/quarantine/deprecated）+ `basedOn` 双哈希 |
+| 覆盖表 | **`descriptions.json`**，三态（active/quarantine/deprecated）+ `basedOn` 双哈希（描述哈希按**归一化后的文本**算：纯空白差异不触发隔离） |
 | 超限长描述 | **进 `descriptions.pending.json` 等离线补写**，不硬砍了事 |
 | 目录区（`catalog:'full'`） | **独立预算 120 字符**（指令区越短越遵循），与 300 无关 |
 
@@ -342,7 +342,7 @@ Optional short heading for the question, such as "Confirm" or "Choose Mode".
 |---|---|---|---|---|---|
 | **native** | 197 KB | 0 | 197 KB | 0% | 全量 |
 | ★★ **index** | ★ **197 KB（全量）** | **11.3 KB** | 209 KB | **18%** | ★ **全量 + 全部工具可见** |
-| ★ **lean** | **122 KB（浅）** | **11.3 KB** | 133 KB | **18%** | 丢嵌套/数组/枚举/默认值 |
+| ★ **lean** | **122 KB（浅）** | **11.3 KB** | 133 KB | **18%** | 丢数组元素/枚举/默认值/属性说明（**嵌套结构保留**） |
 
 ⇒ ★★ **`index` 档 = 全量 schema + 名字目录** ⇒ **准确率最高、指令区只占 18%** ——
 **只花 11 KB 买「几百个工具全可见」**，这就是你要的东西。
@@ -373,7 +373,9 @@ Optional short heading for the question, such as "Confirm" or "Choose Mode".
 **官方要求把参数规则写在参数上；lean 的浅投影会把 per-property `description` 整个丢掉。**
 
 `shallowParameters()` 只保留：顶层键名 / 每键 `type` / `enum`（≤12）/ `required`。
-**丢弃**：每个属性自己的 `description`、默认值、`pattern`、`minimum`/`maximum`、`format`、`oneOf`/`anyOf`、数组 `items`、嵌套结构。
+**丢弃**：每个属性自己的 `description`、默认值、`pattern`、`minimum`/`maximum`、`format`、`oneOf`/`anyOf` 的多分支、数组 `items`、`enum` > 12。
+
+**保留**：**嵌套 object 结构**会递归展开——键名、`type`、`required` 全在，丢的只是每层的 `description`。（这里以前把「嵌套结构」错列进「丢弃」。）
 
 ⇒ **同一份工具定义，native 用户看得到参数规则，lean 用户看不到。**
 

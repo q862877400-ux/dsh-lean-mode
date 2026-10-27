@@ -71,10 +71,22 @@ const CATALOG_HEADER = [
 export function compressDescription(description, maxChars = DEFAULT_MAX_CHARS) {
   const text = String(description == null ? '' : description).replace(/\s+/g, ' ').trim()
   if (text.length <= maxChars) return text
-  const head = text.slice(0, maxChars)
+  // ★ 先给省略号留一格，否则 `slice(0, maxChars) + '…'` 会输出 maxChars+1。
+  //   实测 CJK 无空格、超长 URL、超长单词三种情况都会超 1 个字符。
+  // maxChars <= 1 时连省略号都放不下，直接硬切到上限，保证不发生溢出。
+  if (maxChars <= 1) return text.slice(0, Math.max(0, maxChars))
+  const budget = maxChars - 1
+  // `slice` 按 UTF-16 码元切，会**劈开代理对**：emoji（😀 等）占两个码元，
+  // 切在中间就留下一个孤立的高位代理 —— 非法 Unicode。实测 pad=298 时输出尾部是 `\ud83d`。
+  // 代码里已经有「不把单词切两半」的意识，这里补齐码点层面。
+  let head = text.slice(0, budget)
+  if (head.length > 0) {
+    const lastUnit = head.charCodeAt(head.length - 1)
+    if (lastUnit >= 0xD800 && lastUnit <= 0xDBFF) head = head.slice(0, -1)
+  }
   const space = head.lastIndexOf(' ')
   // 只在空格足够靠后时退到词边界，否则硬切（中文没有空格）。
-  const body = space > maxChars * 0.66 ? head.slice(0, space) : head
+  const body = space > budget * 0.66 ? head.slice(0, space) : head
   return body.replace(/[,;:\s]+$/, '') + '…'
 }
 
@@ -92,11 +104,26 @@ export function needsCuration(tool, maxChars = DEFAULT_MAX_CHARS) {
   const orig = String(tool?.description == null ? '' : tool.description).trim()
   if (orig === '') return 'empty'
   if (orig.length < 15) return 'too-short'
-  if (/^(Args|Returns|Parameters|Raises|Note|Example)s?:/i.test(orig)) return 'argblock'
+  // 参数块开头。补上 `Arguments`（Sphinx / 部分 Google 风格用这个）——
+  // 实测 `Arguments:` 以前落到 null，被当成正常描述，但它其实是个参数块。
+  if (/^(Args|Arguments|Returns|Parameters|Params|Raises|Note|Example)s?:/i.test(orig)) return 'argblock'
   // 单个 CamelCase 标识符当描述（`MetricsQueryRequest`），模型只知道类型名。
   if (/^[A-Z][A-Za-z0-9]{3,}$/.test(orig)) return 'typename'
-  // 标题式短语：全英文 Title Case 且没有句末标点。
-  if (/^[A-Z][A-Za-z0-9\s,'()/-]+$/.test(orig) && !/[.!?。]$/.test(orig)) return 'title-like'
+  // 标题式短语：真的 Title Case（多数实词首字母大写）+ 词数少 + 没有句末标点。
+  //
+  // ⚠ 旧写法 `/^[A-Z][A-Za-z0-9\s,'()/-]+$/` 只检查「首字母大写」，
+  // 于是 "Clicks on the provided element"（5 词、仅 1 词大写）也被判成标题。
+  // 实测 90 个真实 MCP 描述里 7 条被误判（chrome-devtools 的 click/drag/hover/
+  // resize_page/type_text/handle_dialog、codebase-memory 的 delete_project）。
+  // 真标题如 "Structural Analysis" 是每个实词都大写。
+  if (!/[.!?。]$/.test(orig)) {
+    const words = orig.split(/\s+/).filter(Boolean)
+    if (words.length >= 1 && words.length <= 6) {
+      const capped = words.filter(w => /^[A-Z]/.test(w)).length
+      const looksTitleCase = /^[A-Z]/.test(words[0]) && capped / words.length >= 0.6
+      if (looksTitleCase && /^[A-Za-z0-9\s,'()/-]+$/.test(orig)) return 'title-like'
+    }
+  }
   // 结构化长描述：压缩会切掉 `Use when` / `Not for` 这类决策段。
   if (orig.replace(/\s+/g, ' ').trim().length > maxChars) return 'over-budget'
   return null
@@ -113,15 +140,48 @@ export function needsCuration(tool, maxChars = DEFAULT_MAX_CHARS) {
  * 不展开的话，浅投影后只剩 `{"params": {"type": "object"}}`，
  * 模型看不到任何参数名，只能自己编（实测 44.2% 对）。
  */
-function resolveRef(node, root) {
+/**
+ * 递归展开 `$ref`，并保留原来的 `$defs` 根。
+ *
+ * 旧实现只解一层：`{$ref:'#/$defs/Outer'}` 解开后得到的目标里若还有
+ * `{$ref:'#/$defs/Inner'}`，就直接交给调用方了——而调用方拿的是**已解析的子树**，
+ * 里面没有 `$defs`，于是内层引用解析失败、塌成 `{}`。实测 Pydantic 的嵌套模型
+ * （Outer → Inner）投影后 `inner` 变成空对象，模型看不到任何字段。
+ *
+ * 两条规则：
+ *   1. 递归解到底，且始终用**最初的根**去找目标；
+ *   2. 用一个 seen 集合挡住循环引用（`A → B → A` 会在重复处塌成 `{}`，不爆栈）。
+ * @param node 待解析节点。
+ * @param root 提供 `$defs` 的根 schema。
+ * @param seen 已展开过的 `$ref` 字符串，用于防环。
+ * @returns 展开后的节点；解不开的部分返回 `{}`。
+ */
+function resolveRef(node, root, seen) {
   if (node == null || typeof node !== 'object') return node
-  if (node.$ref === undefined) return node
-  let cursor = root
-  for (const segment of String(node.$ref).replace(/^#\//, '').split('/')) {
+  const visited = seen ?? new Set()
+  if (typeof node.$ref === 'string') {
+    if (visited.has(node.$ref)) return {}
+    let cursor = root
+    for (const segment of node.$ref.replace(/^#\//, '').split('/')) {
+      if (cursor == null) return {}
+      cursor = cursor[segment]
+    }
     if (cursor == null) return {}
-    cursor = cursor[segment]
+    const next = new Set(visited)
+    next.add(node.$ref)
+    const resolved = resolveRef(cursor, root, next)
+    // `$ref` 同层的注解（description 等）优先于目标自带的
+    const rest = { ...node }
+    delete rest.$ref
+    return Object.keys(rest).length === 0 ? resolved : { ...resolved, ...rest }
   }
-  return cursor == null ? {} : cursor
+  if (Array.isArray(node)) return node.map(item => resolveRef(item, root, visited))
+  const out = {}
+  for (const [key, value] of Object.entries(node)) {
+    // `$defs` 本身不往下展开（那是引用的仓库，展开会指数膨胀）
+    out[key] = key === '$defs' || key === 'definitions' ? value : resolveRef(value, root, visited)
+  }
+  return out
 }
 
 /**
@@ -129,18 +189,47 @@ function resolveRef(node, root) {
  * @param parameters 工具的 `parameters` schema。
  * @returns 只保留顶层键、类型、enum（≤12）与 required 的 schema。
  */
+/**
+ * 浅投影时推断一个属性的类型。
+ *
+ * 优先看 `type`；没有就看 `anyOf`/`oneOf` 里**唯一的非 null 分支**
+ * （这是 Pydantic `Optional[X]` 的标准编码）。都推不出就返回 undefined，
+ * 由调用方写成 annotation-only（任意 JSON），不要猜。
+ * @param prop 单个属性的 schema 节点。
+ * @returns 可用的类型字符串，或 undefined。
+ */
+function inferShallowType(prop) {
+  const t = Array.isArray(prop.type) ? prop.type[0] : prop.type
+  if (typeof t === 'string' && t !== 'null') return t
+  for (const key of ['anyOf', 'oneOf']) {
+    const branches = Array.isArray(prop[key]) ? prop[key] : []
+    if (branches.length === 0) continue
+    const typed = branches.filter(b => b && typeof b.type === 'string' && b.type !== 'null')
+    if (typed.length === 1) return typed[0].type          // Optional[X] → X
+    if (typed.length > 1) {
+      const uniq = [...new Set(typed.map(b => b.type))]
+      if (uniq.length === 1) return uniq[0]               // 多个分支同类型
+    }
+  }
+  return undefined
+}
+
 export function shallowParameters(parameters) {
   if (parameters == null || parameters.type !== 'object' || parameters.properties == null) return { type: 'object' }
   const required = Array.isArray(parameters.required) ? parameters.required : []
   const properties = {}
   for (const key of Object.keys(parameters.properties)) {
     const prop = resolveRef(parameters.properties[key] || {}, parameters)
-    const declared = Array.isArray(prop.type) ? prop.type[0] : prop.type
-    const type = typeof declared === 'string' ? declared : 'object'
+    const declared = inferShallowType(prop)
+    // 推不出类型就**不要写 type**（annotation-only = 任意 JSON），
+    // 绝不能谎报成 "object"——那会让模型以为该传对象。实测 anyOf 参数
+    // （Pydantic 的 Optional[X]）以前全被标成 object，106 处。
+    const type = declared
     const enumValues = prop.enum
+    const base = type === undefined ? {} : { type }
     const shape = Array.isArray(enumValues) && enumValues.length > 0 && enumValues.length <= 12
-      ? { type, enum: enumValues }
-      : { type }
+      ? { ...base, enum: enumValues }
+      : base
     // 被展开出来的对象带上它的键名——那正是模型唯一能看到的参数清单。
     if (prop.properties != null && Object.keys(prop.properties).length > 0) {
       shape.properties = shallowParameters(prop).properties
@@ -177,6 +266,20 @@ function tablePath(spec, fallbackName) {
 }
 
 /** 工具的 schema 签名，用于识别「同名但定义变了」。 */
+/**
+ * 工具描述的指纹，用于覆盖表的 `basedOn.descHash`。
+ *
+ * **按归一化后的文本算，不是原始文本。** 理由：纯空白差异（换行 / 多空格 /
+ * 首尾空格）经 `compressDescription` 后输出完全相同，对模型没有任何影响。
+ * 用原始文本做哈希会把这类变化误判成「上游已变更」→ 无谓隔离 + 无谓补表。
+ * 实测：`"foo"` 与 `"foo\n"` 压缩后同为 `"foo"`，但原始哈希不同。
+ * @param description 工具原始描述。
+ * @returns 16 位十六进制指纹。
+ */
+export function descriptionSignature(description) {
+  return digest(String(description ?? '').replace(/\s+/g, ' ').trim())
+}
+
 export function schemaSignature(parameters) {
   return digest(stableStringify(parameters ?? {}))
 }
@@ -198,9 +301,12 @@ export class DescriptionTable {
     this.tools = {}
     this.pending = {}
     this.flushTimer = undefined
+    /** 是否已 load()。忘了调会让 resolve() 静默回落到压缩。 */
+    this.loaded = false
   }
 
   load() {
+    this.loaded = true
     try {
       if (!existsSync(this.path)) return this
       const parsed = JSON.parse(readFileSync(this.path, 'utf8'))
@@ -221,7 +327,9 @@ export class DescriptionTable {
     this.pending[tool.name] = {
       reason,
       description: String(tool.description == null ? '' : tool.description),
-      parameters: tool.parameters ?? { type: 'object' },
+      // MCP 桥接来的工具用 inputSchema，插件内部工具用 parameters——两种都认，
+      // 否则会把整份 schema 丢成 {type:'object'}，补表时看不到任何参数。
+      parameters: tool.parameters ?? tool.inputSchema ?? { type: 'object' },
       firstSeen: prev?.firstSeen ?? today,
       lastSeen: today,
     }
@@ -235,6 +343,9 @@ export class DescriptionTable {
    * @returns `{ text, origin }`；origin 用于诊断。
    */
   resolve(tool) {
+    // 忘了 load() 时，	his.tools 是空的 ⇒ 每条都静默回落压缩，覆盖表形同不存在。
+    // 这是个不报错的坏状态：插件看着在工作，只是永远不用表。实测我自己写探针时就漏了 load()。
+    if (!this.loaded) this.logger?.warn?.('lean-mode: DescriptionTable.resolve() 在 load() 之前被调用——覆盖表未加载，全部回落压缩')
     const fallback = compressDescription(tool.description, this.maxChars)
     const entry = this.tools[tool.name]
 
@@ -251,9 +362,9 @@ export class DescriptionTable {
     const basedOn = entry.basedOn
     if (basedOn !== undefined && basedOn !== null) {
       const descChanged = typeof basedOn.descHash === 'string'
-        && basedOn.descHash !== digest(String(tool.description ?? ''))
+        && basedOn.descHash !== descriptionSignature(tool.description)
       const schemaChanged = typeof basedOn.schemaHash === 'string'
-        && basedOn.schemaHash !== schemaSignature(tool.parameters)
+        && basedOn.schemaHash !== schemaSignature(tool.parameters ?? tool.inputSchema)
       if (descChanged || schemaChanged) {
         entry.status = 'quarantine'
         this.markPending(tool, descChanged ? 'stale-description' : 'stale-schema')

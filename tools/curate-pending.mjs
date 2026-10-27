@@ -20,7 +20,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { digest, schemaSignature, compressDescription, DEFAULT_MAX_CHARS } from '../index.mjs'
+import { digest, descriptionSignature, schemaSignature, compressDescription, DEFAULT_MAX_CHARS } from '../index.mjs'
+import { validateEntry } from './validate-descriptions.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_DIR = resolve(HERE, '..')
@@ -166,12 +167,25 @@ switch (cmd) {
       process.exit(1)
     }
 
+    // 写之前先校验。覆盖表是插件唯一的读取源，而插件那边**不做内容校验**——
+    // 写进去就是生效的。以前 apply 只查长度和换行，于是「丢了字面量」的条目
+    // 也能进表，得靠后面单独跑 validate 才发现，那时表已经脏了。
+    // 拒绝时不写盘，直接列出原因，改完再 apply。
+    const draft = { desc, source: 'curated', status: 'active' }
+    const blocking = validateEntry(name, draft, pending[name], maxChars).filter((p) => !p.warn)
+    if (blocking.length > 0 && !process.argv.includes('--force')) {
+      console.error(`✗ 这条描述没通过校验，未写入（${blocking.length} 处）：`)
+      for (const p of blocking) console.error(`    ${p.code}: ${p.detail}`)
+      console.error('  改完再 apply；确实要写草稿加 --force（但那样就没法 remove，直到改好）。')
+      process.exit(1)
+    }
+
     table.tools[name] = {
       desc,
       source: 'curated',
       status: 'active',
       basedOn: {
-        descHash: digest(String(p.description ?? '')),
+        descHash: descriptionSignature(p.description),
         schemaHash: schemaSignature(p.parameters ?? { type: 'object' }),
       },
       updated: new Date().toISOString().slice(0, 10),
@@ -194,9 +208,29 @@ switch (cmd) {
     if (!name) { console.error('用法: node curate-pending.mjs remove <toolName>'); process.exit(2) }
     if (!pendingDoc) { console.error(`✗ pending 文件不存在：${pendingPath}`); process.exit(1) }
     if (!pending[name]) { console.error(`✗ pending 里没有 "${name}"`); process.exit(1) }
+
+    // 删 pending 是**不可逆**的：pending 里那条原始描述是事实的唯一副本，
+    // 覆盖表里没有对应条目就等于把事实永久销毁。以前这里只检查「pending 里有」，
+    // 于是一个从没 apply 过的条目也能被删掉——实测删掉了 1515 字符的原始描述，
+    // 还打印「（覆盖表条目保留）」，而覆盖表是空的。
+    const applied = table.tools?.[name]
+    if (!applied) {
+      console.error(`✗ 覆盖表里没有 "${name}" —— 它的原始事实只存在于 pending，删了就找不回来。`)
+      console.error(`  先 apply 写出条目：node curate-pending.mjs apply ${name} "<description>"`)
+      process.exit(1)
+    }
+    // 已 apply 但没通过校验的也不能删：校验器要靠 pending 做字面量比对。
+    const blocking = validateEntry(name, applied, pending[name], maxChars).filter((p) => !p.warn)
+    if (blocking.length > 0) {
+      console.error(`✗ 覆盖表里 "${name}" 的条目没通过校验，不能清 pending：`)
+      for (const p of blocking) console.error(`    ${p.code}: ${p.detail}`)
+      console.error('  校验器要靠 pending 做字面量比对，清掉之后就验不了了。')
+      process.exit(1)
+    }
+
     delete pendingDoc.pending[name]
     writeFileSync(pendingPath, JSON.stringify(pendingDoc, null, 2) + '\n', 'utf8')
-    console.log(`✓ 已从 pending 移除 ${name}（覆盖表条目保留）`)
+    console.log(`✓ 已从 pending 移除 ${name}（覆盖表条目保留且已通过校验）`)
     break
   }
 

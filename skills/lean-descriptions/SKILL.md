@@ -120,17 +120,21 @@ node "$P/tools/curate-pending.mjs" remove <toolName>
 
 ## 八、磁盘上的实测状态（2026-10-26 重启后）
 
-`descriptions.pending.json` **已存在，54 个待补**：
+`descriptions.pending.json` **已存在，47 个待补**（都是 `over-budget`）：
 
 ```
 over-budget   47   ← 原描述 > 300 字符，压缩即可，风险最低
-title-like     7   ← 只有标题短语，需补全
 ```
+
+> **2026-10-26 修掉一个分类器 bug**：旧的 `title-like` 判据只检查「首字母大写」，
+> 把 `Clicks on the provided element` 这类完整句子也判成标题，往待补队列里塞了 7 条垃圾
+> （chrome-devtools 的 click/drag/hover/resize_page/type_text/handle_dialog + codebase-memory 的 delete_project）。
+> 修好后这 7 条已从 pending 移除，判据改为「真 Title Case（多数实词首字母大写）+ ≤6 词」。
 
 覆盖表 `descriptions.json` 仍是空表（`tools: {}`），所以这 54 个现在都走"截断 + 进 pending"。
 
-**建议从 `over-budget` 那 47 个开始** —— 事实全在原文里，压缩风险最低。
-`title-like` 的 7 个要小心，可能落进 `INSUFFICIENT`。
+**47 个全是 `over-budget`** —— 事实全在原文里，压缩风险最低，直接开始。
+`title-like` 现在不该再误报；若真的出现，说明描述确实只是标题短语，要补全。
 
 ## 九、参考
 

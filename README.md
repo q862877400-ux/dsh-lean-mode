@@ -22,7 +22,7 @@ Most of that is JSON-Schema punctuation the model rarely needs: nested descripti
 Two things, per assembly:
 
 1. **Shrinks each tool's parameter schema to its top-level contract** — top-level keys, `required`, each key's `type`
- and a short `enum` when declared. Nested structure, descriptions and defaults are dropped.
+ and a short `enum` when declared. Descriptions and defaults are dropped. **Nested object structure is preserved** (recursively expanded: keys, types and `required` all survive).
 2. **Appends a `tools:catalog` prompt section** listing **every** tool — including the ones the model is unlikely to recall — with the exact argument envelope and a one-line purpose.
 
 ### Why the envelope must survive

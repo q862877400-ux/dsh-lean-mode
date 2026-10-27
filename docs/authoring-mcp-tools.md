@@ -94,7 +94,7 @@ if (parameters.type !== 'object' || parameters.properties == null) return { type
 
 | 保留 ✓ | 丢弃 ✗ |
 |---|---|
-| 顶层键名 | **嵌套 object 的内部结构**（只剩 `type:"object"`） |
+| 顶层键名 | **嵌套 object 的内部结构保留**（递归展开：键名/type/required 都在，只丢每层的 description） |
 | 每个键的 `type` | **数组的 `items`**（只剩 `type:"array"`） |
 | `enum`（**≤12 个**时） | `enum`（**>12 个**时，整个丢） |
 | `required`（在目录里显示为 `: …` vs `?: …`） | **每个属性自己的 `description`** |

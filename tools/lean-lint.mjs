@@ -24,7 +24,7 @@ const OFFICIAL = { descMedian: 139, verbFirstPct: 82, periodEndPct: 99, sentence
 
 /** 单个**参数描述**的建议上限。官方中位 55 字符，超过这个数多半写成了句子。（与工具描述的 maxChars 无关） */
 const PARAM_DESC_CHARS = 120
-const VERB_STEM = /^(list|read|create|edit|search|fetch|write|return|add|get|set|run|send|open|close|show|remove|delete|update|kill|wait|ask|find|move|copy|build|start|stop|inspect|validate|generate|render|export|import|load|save|execute|spawn|interrupt|present|register|manage|query|trace|resolve|measure|check|apply|extract|upload|attach|launch|terminate|collect|describe|explain|cancel|resume|pause|enable|disable|install|uninstall|toggle|schedule|perform|capture|navigate|declare|place|assign|mirror|hollow|repeat|optimize|click|compare|convert|parse|merge|split|filter|sort|count|locate|retrieve|store|publish|subscribe|notify|report|emit|observe|append|insert|replace|patch|revert|refresh|suppress|unsuppress|obtain|acquire|determine|identify|evaluate|analyze|calculate|compute|derive|modify|change|alter|adjust|detach|mount|unmount|prepend|truncate|clear|reset|restore|backup|archive|compress|decompress|encode|decode|encrypt|decrypt|sign|verify|authorize|authenticate|login|logout|connect|disconnect|broadcast|draw|paint|plot|chart|visualize|highlight|select|deselect|focus|blur|scroll|drag|drop|hover|type|press|release|hold|sleep|retry|abort|fork|clone|replicate|duplicate|rename|relabel|tag|untag|label|annotate|comment|review|approve|reject|accept|deny|grant|revoke|allow|forbid|permit|block|unblock|continue|restart|reload|sync|desync)(s|es|ed|ing)?\b/
+const VERB_STEM = /^(list|read|create|edit|search|fetch|write|return|add|get|set|run|send|open|close|show|remove|delete|update|kill|wait|ask|find|move|copy|build|start|stop|inspect|validate|generate|render|export|import|load|save|execute|spawn|interrupt|present|register|manage|query|trace|resolve|measure|check|apply|extract|upload|attach|launch|terminate|collect|describe|explain|cancel|resume|pause|enable|disable|install|uninstall|toggle|schedule|perform|capture|navigate|declare|place|assign|mirror|hollow|repeat|optimize|click|compare|convert|parse|merge|split|filter|sort|count|locate|retrieve|store|publish|subscribe|notify|report|emit|observe|append|insert|replace|patch|revert|refresh|suppress|unsuppress|obtain|acquire|determine|identify|evaluate|analyze|calculate|compute|derive|modify|change|alter|adjust|detach|mount|unmount|prepend|truncate|clear|reset|restore|backup|archive|compress|decompress|encode|decode|encrypt|decrypt|sign|verify|authorize|authenticate|login|logout|connect|disconnect|broadcast|draw|paint|plot|chart|visualize|highlight|select|deselect|focus|blur|scroll|drag|drop|hover|type|press|release|hold|sleep|retry|abort|fork|clone|replicate|duplicate|rename|relabel|tag|untag|label|annotate|comment|review|approve|reject|accept|deny|grant|revoke|allow|forbid|permit|block|unblock|continue|restart|reload|sync|desync|emulate|fill|go|provide|resize|take|index|map|outline|record|browse)(s|es|ed|ing)?\b/
 
 function catalogLine(t) {
   const p = t.parameters || {}; const props = p.properties || {}; const req = new Set(Array.isArray(p.required) ? p.required : [])
@@ -93,18 +93,59 @@ const resolveRef = (node, root) => {
 for (const t of tools) {
   const p = t.parameters || {}
   const d = String(t.description ?? '')
+/**
+ * 一个属性经浅投影后还能不能拿到类型。
+ *
+ * 与 `shallowParameters` 的推断规则保持一致：先看 `type`，再看
+ * `anyOf`/`oneOf` 里唯一的非 null 分支（Pydantic `Optional[X]` 的编码）。
+ * 判据必须是「投影后的结果」——查原始 schema 会把能推出类型的 anyOf 误报成缺陷。
+ * @param prop 单个属性的 schema 节点。
+ * @returns 类型字符串，或 undefined。
+ */
+function shallowTypeOf(prop) {
+  const t = Array.isArray(prop.type) ? prop.type[0] : prop.type
+  if (typeof t === 'string' && t !== 'null') return t
+  for (const key of ['anyOf', 'oneOf']) {
+    const branches = Array.isArray(prop[key]) ? prop[key] : []
+    const typed = branches.filter(b => b && typeof b.type === 'string' && b.type !== 'null')
+    if (typed.length === 1) return typed[0].type
+    if (typed.length > 1 && new Set(typed.map(b => b.type)).size === 1) return typed[0].type
+  }
+  return undefined
+}
   if (p.type !== 'object' || !p.properties) F(t.name, 'A1 顶层须 object+properties', 'lean 下参数会【全丢】')
   // v2 不按 `。`/换行切句，但会把连续空白折叠成单空格 —— 换行只是被压平，不是损害
   if (/\n/.test(d)) W(t.name, 'A2 描述含换行（v2 会折叠成空格）', '不是错误：compressDescription 折叠空白')
   if (d.replace(/\s+/g, ' ').trim().length > MAX_CHARS) W(t.name, 'A3 描述超 ' + MAX_CHARS + ' 字符', '当前 ' + d.trim().length + '，会被截断并进入 pending 待补')
+  // A3b：压缩**输出**也必须在上限内。以前 compressDescription 先切 maxChars 再追加 `…`，
+  // 结果 301 字符（CJK 无空格 / 超长 URL / 超长单词三种情况都会触发）。检查输出而不是输入，
+  // 才能挡住这类 off-by-one——查输入的话前三种情况长度本来就超，看不出问题。
+  {
+    const outLen = compressDescription(t.description, MAX_CHARS).length
+    if (outLen > MAX_CHARS) F(t.name, 'A3b 压缩输出超 ' + MAX_CHARS + ' 字符', '实际输出 ' + outLen)
+  }
   for (const [k, rawProp] of Object.entries(p.properties || {})) {
     const v = resolveRef(rawProp, p)
     if (v.enum && v.enum.length > 12) F(t.name, 'A4 枚举须 ≤12 个', k + ' 有 ' + v.enum.length + ' 个（lean 会整个丢弃）')
-    if (!v.type && v.properties == null) F(t.name, 'A5 每个键须写 type', k)
-    if (v.type === 'object') W(t.name, 'A6 慎用嵌套 object', k + '（lean 只留 type；native 完整）')
-    if (v.type === 'array') W(t.name, 'A7 慎用数组', k + '（lean 只留 type；native 完整）')
+    // A5：判据从「原始 schema 有 type」改成「**浅投影后**能拿到 type」。
+    // shallowParameters 现在会从 anyOf/oneOf 推断 Optional[X]，所以
+    // `{anyOf:[{type:'string'},{type:'null'}]}` 不再是缺陷（实测 106 个
+    // anyOf 参数全部能推出类型）。只有真推不出来才算丢信息。
+    if (!shallowTypeOf(v) && v.properties == null) F(t.name, 'A5 浅投影后拿不到 type', k)
+    // 嵌套 object 在 lean 下会**递归展开**：键名、type、required 都在，只丢每层的 description。
+    // 以前这里一律说「lean 只留 type」，是错的——实测 `filter.properties.author` 原样保留。
+    // 改成只在**真的会丢东西**时才提醒，并说清丢的是什么。
+    if (v.type === 'object') {
+      const lost = leanLosses(v, k)
+      if (lost.length > 0) W(t.name, 'A6 嵌套 object 里的信息会丢', k + '：' + lost.slice(0, 3).join(', '))
+    }
+    if (v.type === 'array' && v.items !== undefined) W(t.name, 'A7 数组元素类型会丢', k + '（lean 只留 type:"array"；元素结构没了）')
     if (Array.isArray(v.type)) F(t.name, 'A8 type 不可为数组', k)
-    if (v.oneOf || v.anyOf) F(t.name, 'A9 禁 oneOf/anyOf', k + '（lean 只留 type）')
+    // A9：oneOf/anyOf 本身不再是缺陷——能推断出唯一类型就没损失。
+    // 只有「多个不同类型的非 null 分支」才会在浅投影后塌成任意类型。
+    if ((v.oneOf || v.anyOf) && !shallowTypeOf(v)) {
+      F(t.name, 'A9 oneOf/anyOf 推不出唯一类型', k + '（多类型分支在 lean 下塌成任意类型）')
+    }
   }
 }
 
@@ -143,8 +184,38 @@ if (pending.length) {
   for (const x of pending) (byReason[x.reason] ||= []).push(x.name)
   for (const r of Object.keys(byReason).sort()) console.log('      ' + r + ' ×' + byReason[r].length + '： ' + byReason[r].slice(0, 3).join(', ') + (byReason[r].length > 3 ? ' …' : ''))
 }
-const lostKeys = tools.flatMap(t => Object.entries((t.parameters || {}).properties || {}).filter(([, v]) => v.type === 'object' || v.type === 'array' || (v.enum && v.enum.length > 12) || v.description || v.default !== undefined).map(([k]) => k))
-console.log('   参数里被 lean 丢掉的信息点 = ' + lostKeys.length + ' 处（嵌套/数组/枚举>12/默认值/属性说明）')
+/**
+ * 一个属性在 lean 浅投影下**真的会丢**哪些信息。
+ *
+ * 旧判据把 `v.type === 'object'` 也算成丢失——**错的**：`shallowParameters` 会递归展开嵌套对象，
+ * 键名、type、required 全保留，丢的只是每层的 description。实测嵌套参数被算成「丢 1 处」。
+ *
+ * 旧判据同时**漏了**真正会丢的：pattern/minimum/format、oneOf/anyOf 的多分支、以及嵌套层里的
+ * description（它只检查顶层 properties 的 description）。
+ *
+ * @param {object} prop 一个属性 schema。
+ * @param {string} path 诊断用路径。
+ * @returns {string[]} 会丢的信息点；空数组表示一点不丢。
+ */
+function leanLosses(prop, path) {
+  const out = []
+  if (prop == null || typeof prop !== 'object') return out
+  if (prop.description) out.push(`${path}.description`)
+  if (prop.default !== undefined) out.push(`${path}.default`)
+  for (const k of ['pattern', 'minimum', 'maximum', 'format', 'minLength', 'maxLength', 'minItems', 'maxItems']) {
+    if (prop[k] !== undefined) out.push(`${path}.${k}`)
+  }
+  if (Array.isArray(prop.enum) && prop.enum.length > 12) out.push(`${path}.enum(${prop.enum.length})`)
+  if (prop.type === 'array' && prop.items !== undefined) out.push(`${path}.items`)
+  const branches = Array.isArray(prop.oneOf) ? prop.oneOf : (Array.isArray(prop.anyOf) ? prop.anyOf : null)
+  if (branches && branches.length > 1) out.push(`${path}.union(${branches.length})`)
+  for (const [k, v] of Object.entries(prop.properties ?? {})) out.push(...leanLosses(v, `${path}.${k}`))
+  return out
+}
+const lostKeys = tools.flatMap(t => Object.entries((t.parameters || {}).properties || {}).flatMap(([k, v]) => leanLosses(v, k)))
+// 「嵌套」不在丢失清单里——shallowParameters 会递归展开、完整保留嵌套结构。
+// 以前这里把嵌套算成损失，导致「纯嵌套参数」被判成丢信息（实测 filter 被算成丢 1 处）。
+console.log('   参数里被 lean 丢掉的信息点 = ' + lostKeys.length + ' 处（属性说明/默认值/pattern等约束/数组元素/枚举>12/联合分支；嵌套结构本身保留）')
 console.log('   ⇒ ★ 要保住这些信息就用 catalog 档（shape: false），要压上下文才用 lean 档')
 console.log('')
 const byRule = {}

@@ -31,14 +31,47 @@ const OPENERS = [
 ]
 
 /** 从原描述里抽出必须保留的字面量。 */
+/**
+ * 全大写但**是普通英文词**的令牌——它们是正文里的强调，不是单位或缩写。
+ *
+ * 实测：47 条真实 pending 描述里，`\b[A-Z]{2,}\b` 抽出 64 种「必需字面量」，
+ * 其中 12 条描述的提取物**全是**这类词（`WHEN`/`TO`/`CALL`/`BEFORE`/`AGAIN`/`SKIP`/`CURRENT`）。
+ * 要求策展人在 300 字符里保住「WHEN」「TO」，纯属浪费预算。
+ *
+ * 这张表来自真实语料的经验，不是权威词表。要新增噪音词，先看 `skippedLiterals` 的日志。
+ */
+const COMMON_WORDS = new Set([
+  'AGAIN', 'ALL', 'ALSO', 'ALWAYS', 'AND', 'ANY', 'AS', 'BEFORE', 'BUT', 'BY', 'CALL', 'CAN', 'CHEAP',
+  'CITATIONS', 'CURRENT', 'DIFFERS', 'DO', 'EMPTY', 'EVEN', 'EXAMPLES', 'FOR', 'FROM', 'FULL',
+  'GOOD', 'HEAD', 'HOME', 'HOW', 'IF', 'IMPORTANT', 'IN', 'INTO', 'IS', 'IT', 'ITEM', 'JUST',
+  'MAY', 'MORE', 'MUST', 'NAME', 'NO', 'NOT', 'OF', 'OMIT', 'ON', 'ONLY', 'OR', 'OVER',
+  'PROACTIVELY', 'QUERIES', 'RECALL', 'REFERENCES', 'RETRIEVAL', 'SHOULD', 'SKIP', 'SO',
+  'THIS', 'TO', 'TOOL', 'UNLESS', 'UP', 'USE', 'WHEN', 'WHY', 'WITH', 'YOU',
+])
+
+/** 被 COMMON_WORDS 跳过的令牌，供排查「为什么某个词没被要求保留」。 */
+export const skippedLiterals = []
+
+/**
+ * 从原描述里抽出必须保留的字面量。
+ *
+ * 三类：枚举映射（`0=solid`）、**全大写单位/缩写**（`MILLIMETRES`/`PDF`）、数值约束（`must be > 0`）。
+ * 全大写那一类要排除普通英文词——见 `COMMON_WORDS`。
+ *
+ * @param {string} source 原描述（含所有参数描述）。
+ * @returns {string[]} 必须逐字保留的字面量。
+ */
 export function requiredLiterals(source) {
   const out = new Set()
   // 枚举映射：0=solid / 1=midsurface
   for (const m of String(source).matchAll(/\b\d+\s*=\s*[A-Za-z][A-Za-z0-9_]*/g)) {
-    out.add(m[0].replace(/\s+/g, '').replace('=', '='))
+    out.add(m[0].replace(/\s+/g, ''))
   }
-  // 全大写单位/缩写：MILLIMETRES / DEGREES / PDF
-  for (const m of String(source).matchAll(/\b[A-Z]{2,}\b/g)) out.add(m[0])
+  // 全大写单位/缩写：MILLIMETRES / DEGREES / PDF。普通英文词不算。
+  for (const m of String(source).matchAll(/\b[A-Z]{2,}\b/g)) {
+    if (COMMON_WORDS.has(m[0])) { if (!skippedLiterals.includes(m[0])) skippedLiterals.push(m[0]); continue }
+    out.add(m[0])
+  }
   // must be > 0 之类的数值约束
   for (const m of String(source).matchAll(/\b(?:must|should)\s+be\s*[<>=!]+\s*-?\d+(?:\.\d+)?/gi)) out.add(m[0])
   return [...out]
