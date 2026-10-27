@@ -131,7 +131,7 @@ over-budget   47   ← 原描述 > 300 字符，压缩即可，风险最低
 > （chrome-devtools 的 click/drag/hover/resize_page/type_text/handle_dialog + codebase-memory 的 delete_project）。
 > 修好后这 7 条已从 pending 移除，判据改为「真 Title Case（多数实词首字母大写）+ ≤6 词」。
 
-覆盖表 `descriptions.json` 仍是空表（`tools: {}`），所以这 54 个现在都走"截断 + 进 pending"。
+覆盖表 `descriptions.json` 仍是空表（`tools: {}`），所以这 47 个现在都走"截断 + 进 pending"。
 
 **47 个全是 `over-budget`** —— 事实全在原文里，压缩风险最低，直接开始。
 `title-like` 现在不该再误报；若真的出现，说明描述确实只是标题短语，要补全。
